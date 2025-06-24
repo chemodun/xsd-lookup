@@ -1,0 +1,3439 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified">
+
+  <xs:include schemaLocation="common.xsd" />
+
+  <!-- Script name starts with letter, . is allowed, this is different from MD scripts etc. -->
+  <xs:simpleType name="aiscriptname">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[!A-Za-z][A-Za-z0-9_.]+" />
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- ===== Text simple types ==== -->
+
+  <xs:simpleType name="labelname">
+    <xs:annotation>
+      <xs:documentation>
+        Label name
+      </xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="namestring" />
+  </xs:simpleType>
+
+  <xs:simpleType name="interrupt_conditionsref">
+    <xs:annotation>
+      <xs:documentation>
+        Name of a library interrupt condition set
+      </xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="namestring" />
+  </xs:simpleType>
+
+  <xs:simpleType name="interrupt_actionsref">
+    <xs:annotation>
+      <xs:documentation>
+        Name of a library interrupt action set
+      </xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="namestring" />
+  </xs:simpleType>
+
+  <xs:simpleType name="interrupt_handlerref">
+    <xs:annotation>
+      <xs:documentation>
+        Name of a library interrupt handler
+      </xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="namestring" />
+  </xs:simpleType>
+
+  <xs:simpleType name="resumeflag">
+    <xs:annotation>
+      <xs:documentation>
+        Resume this action when an interrupt script returns, instead of resuming at a label? This has no effect if a resume attribute was specified in &lt;run_interrupt_script&gt;.
+        If the action was already completed during the interrupt, the script will continue after the action immediately.
+        Note that changing the resume attribute has no effect on existing savegames. The resume state will be restored as it was saved before, even if the attribute changes in the script.
+      </xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="boolean" />
+  </xs:simpleType>
+
+  <!-- ===== Enumeration simple types ==== -->
+
+  <xs:simpleType name="fbehaviourlookup">
+    <xs:annotation>
+      <xs:documentation>
+        Flight behaviour
+      </xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="expression">
+      <xs:simpleType>
+        <xs:restriction base="xs:string">
+          <xs:enumeration value="flightbehaviour.default" />
+          <xs:enumeration value="flightbehaviour.generic" />
+          <xs:enumeration value="flightbehaviour.none" />
+          <xs:enumeration value="flightbehaviour.attackrun" />
+          <xs:enumeration value="flightbehaviour.bigfight" />
+          <xs:enumeration value="flightbehaviour.boardingpod" />
+          <xs:enumeration value="flightbehaviour.chase" />
+          <xs:enumeration value="flightbehaviour.crazyivan" />
+          <xs:enumeration value="flightbehaviour.dock" />
+          <xs:enumeration value="flightbehaviour.dockpath" />
+          <xs:enumeration value="flightbehaviour.dock_highspeed" />
+          <xs:enumeration value="flightbehaviour.dogfight1" />
+          <xs:enumeration value="flightbehaviour.dogfight2" />
+          <xs:enumeration value="flightbehaviour.evasive_loop" />
+          <xs:enumeration value="flightbehaviour.evasive_random" />
+          <xs:enumeration value="flightbehaviour.evasive_roll" />
+          <xs:enumeration value="flightbehaviour.evasive_simple" />
+          <xs:enumeration value="flightbehaviour.evasive_spiral" />
+          <xs:enumeration value="flightbehaviour.gaindistance" />
+          <xs:enumeration value="flightbehaviour.guidedmissile" />
+          <xs:enumeration value="flightbehaviour.halfloop" />
+          <xs:enumeration value="flightbehaviour.hardbrake" />
+          <xs:enumeration value="flightbehaviour.lasertower" />
+          <xs:enumeration value="flightbehaviour.loop" />
+          <xs:enumeration value="flightbehaviour.mining" />
+          <xs:enumeration value="flightbehaviour.observe" />
+          <xs:enumeration value="flightbehaviour.pickup" />
+          <xs:enumeration value="flightbehaviour.racing" />
+          <xs:enumeration value="flightbehaviour.roll_cw" />
+          <xs:enumeration value="flightbehaviour.roll_ccw" />
+          <xs:enumeration value="flightbehaviour.spiral" />
+          <xs:enumeration value="flightbehaviour.steerclear" />
+          <xs:enumeration value="flightbehaviour.swarmdrone" />
+          <xs:enumeration value="flightbehaviour.undock" />
+          <xs:enumeration value="flightbehaviour.undockpath" />
+        </xs:restriction>
+      </xs:simpleType>
+    </xs:union>
+  </xs:simpleType>
+
+  <xs:simpleType name="fcmlookup">
+    <xs:annotation>
+      <xs:documentation>
+        Flight control model
+      </xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="expression">
+      <xs:simpleType>
+        <xs:restriction base="xs:string">
+          <xs:enumeration value="flightcontrolmodel.forced" />
+          <xs:enumeration value="flightcontrolmodel.highway" />
+          <xs:enumeration value="flightcontrolmodel.linear" />
+          <xs:enumeration value="flightcontrolmodel.spline" />
+          <xs:enumeration value="flightcontrolmodel.steering" />
+        </xs:restriction>
+      </xs:simpleType>
+    </xs:union>
+  </xs:simpleType>
+
+  <!-- ===== Commands ==== -->
+
+  <xs:simpleType name="commandlookup">
+    <xs:annotation>
+      <xs:documentation>
+        Command
+      </xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="expression">
+      <xs:simpleType>
+        <xs:restriction base="xs:string">
+          <xs:enumeration value="command.attackenemies">
+            <xs:annotation>
+              <xs:documentation>
+                Attack Enemies Command (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.attackobject">
+            <xs:annotation>
+              <xs:documentation>
+                Attack Object Command (param = the target to attack)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.buildexpansion">
+            <xs:annotation>
+              <xs:documentation>
+                Build Expansion Command (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.buildship">
+            <xs:annotation>
+              <xs:documentation>
+                Build Ship Command (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.buildstation">
+            <xs:annotation>
+              <xs:documentation>
+                Build Station Command (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.buildupgrades">
+            <xs:annotation>
+              <xs:documentation>
+                Build Upgrades Command (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.collect">
+            <xs:annotation>
+              <xs:documentation>
+                Collect Command (param = the object to collect)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.dockat">
+            <xs:annotation>
+              <xs:documentation>
+                Dock at Command (param = the object to dock at)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.freemining">
+            <xs:annotation>
+              <xs:documentation>
+                Free Mining Command (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.freetrade">
+            <xs:annotation>
+              <xs:documentation>
+                Free Trading Command (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.follow">
+            <xs:annotation>
+              <xs:documentation>
+                Follow Command (param = the object to follow)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.escort">
+            <xs:annotation>
+              <xs:documentation>
+                Escort Command (param = the object to escort)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.mining">
+            <xs:annotation>
+              <xs:documentation>
+                Mining Command (param = the zone where stuff is mined)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.move">
+            <xs:annotation>
+              <xs:documentation>
+                Move Command for object (param = the object to fly to)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.movetozone">
+            <xs:annotation>
+              <xs:documentation>
+                Move Command for zone (param = the zone to fly to)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.patrol">
+            <xs:annotation>
+              <xs:documentation>
+                Patrol Command (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.police">
+            <xs:annotation>
+              <xs:documentation>
+                Police Command (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.protect">
+            <xs:annotation>
+              <xs:documentation>
+                Protect Command (param = the object to protect)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.refuel">
+            <xs:annotation>
+              <xs:documentation>
+                Refuel Command (param = amount of fuel)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.repair">
+            <xs:annotation>
+              <xs:documentation>
+                Repair Command (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.scan">
+            <xs:annotation>
+              <xs:documentation>
+                Scan Object Command (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.support">
+            <xs:annotation>
+              <xs:documentation>
+                Support Command (param = the object to support)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.searchresources">
+            <xs:annotation>
+              <xs:documentation>
+                Search for Resources Command
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.searchtrades">
+            <xs:annotation>
+              <xs:documentation>
+                Search for Trades Command
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.trade">
+            <xs:annotation>
+              <xs:documentation>
+                Trade Command (param = the object to trade with)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.wait">
+            <xs:annotation>
+              <xs:documentation>
+                Wait Command
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.explore">
+            <xs:annotation>
+              <xs:documentation>
+                Explore Command
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.withdrawbattle">
+            <xs:annotation>
+              <xs:documentation>
+                Withdraw from Battle Command
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.resupply">
+            <xs:annotation>
+              <xs:documentation>
+                Resupply command
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.recon">
+            <xs:annotation>
+              <xs:documentation>
+                Reconnoiter command
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.investigate">
+            <xs:annotation>
+              <xs:documentation>
+                Investigate command
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="command.recycle">
+            <xs:annotation>
+              <xs:documentation>
+                Recycle command
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+        </xs:restriction>
+      </xs:simpleType>
+    </xs:union>
+  </xs:simpleType>
+
+  <!-- ===== Command Actions ==== -->
+
+  <xs:simpleType name="commandactionlookup">
+    <xs:annotation>
+      <xs:documentation>
+        Command action
+      </xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="expression">
+      <xs:simpleType>
+        <xs:restriction base="xs:string">
+          <xs:enumeration value="commandaction.standingby">
+            <xs:annotation>
+              <xs:documentation>
+                Stand By Command action (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.calculating">
+            <xs:annotation>
+              <xs:documentation>
+                Calculating parameters action (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.repairingto">
+            <xs:annotation>
+              <xs:documentation>
+                Reparing to component Command action (param = component to repair)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.repairchecking">
+            <xs:annotation>
+              <xs:documentation>
+                Stand By Command action (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.scanningto">
+            <xs:annotation>
+              <xs:documentation>
+                Scanning to component Command action (param = component to scan)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.searchingresources">
+            <xs:annotation>
+              <xs:documentation>
+                Searching resources Command action (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.executingtrade">
+            <xs:annotation>
+              <xs:documentation>
+                Executing Trade Command action (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.docking">
+            <xs:annotation>
+              <xs:documentation>
+                Docking Command action (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.undocking">
+            <xs:annotation>
+              <xs:documentation>
+                Undocking (also detach from masstraffic) Command action (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.waitingtodock">
+            <xs:annotation>
+              <xs:documentation>
+                Waiting for a free dock Command action (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.attacking">
+            <xs:annotation>
+              <xs:documentation>
+                Attacking Enemies Command action (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.attackingto">
+            <xs:annotation>
+              <xs:documentation>
+                Attacking to Enemy Command action (param = enemy object)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.flying">
+            <xs:annotation>
+              <xs:documentation>
+                Flying Command action (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.flyingto">
+            <xs:annotation>
+              <xs:documentation>
+                Flying to zone Command action (param = destination zone)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.jumping">
+            <xs:annotation>
+              <xs:documentation>
+                Jumping Command action (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.searchingtrades">
+            <xs:annotation>
+              <xs:documentation>
+                Searching for trades Command action (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.waitingdrones">
+            <xs:annotation>
+              <xs:documentation>
+                Waiting for drones to dock (detach from masstraffic) Command action (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.investigating">
+            <xs:annotation>
+              <xs:documentation>
+                Investigating Object Command action (param = object being investigated)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.building">
+            <xs:annotation>
+              <xs:documentation>
+                Building Command action (no param)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.buildingto">
+            <xs:annotation>
+              <xs:documentation>
+                Building Object Command action (param = object being built)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+          <xs:enumeration value="commandaction.orderfailed">
+            <xs:annotation>
+              <xs:documentation>
+                Error. Unable to execute order and standing by.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:enumeration>
+        </xs:restriction>
+      </xs:simpleType>
+    </xs:union>
+  </xs:simpleType>
+
+  <!-- ===== Attribute groups ==== -->
+
+  <xs:attributeGroup name="blockingaction">
+    <xs:attributeGroup ref="action" />
+    <xs:attribute name="sinceversion" type="xs:nonNegativeInteger">
+      <xs:annotation>
+        <xs:documentation>
+          Script version in which this blocking action was added
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+  </xs:attributeGroup>
+
+  <!-- ===== Complex Types ===== -->
+
+  <xs:complexType name="run_script_param">
+    <xs:annotation>
+      <xs:documentation>
+        AI script parameter
+      </xs:documentation>
+    </xs:annotation>
+    <xs:attribute name="name" type="paramname" use="required">
+      <xs:annotation>
+        <xs:documentation>
+          Parameter name
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="value" type="expression" use="required">
+      <xs:annotation>
+        <xs:documentation>
+          Parameter value
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="comment" type="comment" />
+  </xs:complexType>
+
+  <!-- ===== Conditions ==== -->
+
+  <!--
+  <xs:group name="specificconditions_event">
+    <xs:choice>
+
+      <xs:element name="event_...">
+      </xs:element>
+
+    </xs:choice>
+  </xs:group>
+  -->
+
+  <!--
+  XML restriction: Elements with the same name and in the same scope must have the same type.
+  Which means that check_all / check_any always have to behave the same, even if we know whether
+  they are allowed to have event conditions or not. So we always allow them.
+  -->
+
+  <xs:group name="conditions_single_nonevent">
+    <xs:choice>
+      <xs:group ref="commonconditions_nonevent"/>
+      <!-- There are no AI-specific non-event conditions -->
+    </xs:choice>
+  </xs:group>
+
+  <xs:group name="conditions_single_event">
+    <xs:choice>
+      <xs:group ref="commonconditions_event"/>
+      <!-- There are no AI-specific event conditions (yet) -->
+      <!-- <xs:group ref="specificconditions_event"/> -->
+    </xs:choice>
+  </xs:group>
+
+  <xs:group name="conditions_nonevent">
+    <xs:choice>
+      <xs:element name="check_all" type="checkall"/>
+      <xs:element name="check_any" type="checkany"/>
+      <xs:group ref="conditions_single_nonevent"/>
+    </xs:choice>
+  </xs:group>
+
+  <xs:group name="conditions">
+    <xs:sequence>
+      <xs:group ref="conditions_single_event" minOccurs="0" maxOccurs="1"/>
+      <xs:group ref="conditions_nonevent" minOccurs="0" maxOccurs="unbounded" />
+    </xs:sequence>
+  </xs:group>
+
+  <xs:complexType name="checkall">
+    <xs:annotation>
+      <xs:documentation>
+        List of conditions all of which must be met
+      </xs:documentation>
+    </xs:annotation>
+    <xs:group ref="conditions"/>
+    <xs:attributeGroup ref="condition" />
+    <xs:attributeGroup ref="counting" />
+    <xs:attribute name="negate" type="negatecondition" />
+  </xs:complexType>
+
+  <xs:complexType name="checkany">
+    <xs:annotation>
+      <xs:documentation>
+        List of conditions any one of which must be met
+      </xs:documentation>
+    </xs:annotation>
+    <xs:sequence>
+      <xs:choice minOccurs="1" maxOccurs="unbounded">
+        <xs:element name="check_all" type="checkall"/>
+        <xs:element name="check_any" type="checkany"/>
+        <xs:group ref="conditions_single_event"/>
+        <xs:group ref="conditions_single_nonevent"/>
+      </xs:choice>
+    </xs:sequence>
+    <xs:attributeGroup ref="condition" />
+    <xs:attributeGroup ref="counting" />
+    <xs:attribute name="negate" type="negatecondition" />
+  </xs:complexType>
+
+  <xs:group name="blockingaction">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="on_attentionchange">
+          <xs:annotation>
+            <xs:documentation>
+              Actions to be performed right before the script switches to a different &lt;attention&gt; block on an attention level change. Blocking actions are not allowed. &lt;break&gt; and &lt;continue&gt; only work on loops within the attention change actions. &lt;resume&gt; is supported.
+            </xs:documentation>
+          </xs:annotation>
+          <xs:complexType>
+            <xs:group ref="actions" />
+            <xs:attribute name="comment" type="comment" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="interrupt_after_time">
+          <xs:complexType>
+            <xs:attribute name="time" type="expression" use="required">
+              <xs:annotation>
+                <xs:documentation>
+                  Time duration until timeout
+                </xs:documentation>
+              </xs:annotation>
+            </xs:attribute>
+            <xs:attribute name="comment" type="comment" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="interrupt">
+          <xs:annotation>
+            <xs:documentation>
+              Conditionally interrupt a blocking action and perform certain actions when the interrupt occurs.
+            </xs:documentation>
+          </xs:annotation>
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="conditions" type="interrupt_conditions_withref">
+                <xs:annotation>
+                  <xs:documentation>
+                    Conditions that must be met in order for the interrupt to occur.
+                  </xs:documentation>
+                </xs:annotation>
+              </xs:element>
+              <xs:element name="actions" type="interrupt_actions" minOccurs="0" maxOccurs="1">
+                <xs:annotation>
+                  <xs:documentation>
+                    Actions to be performed on an interrupt. Blocking actions are not allowed. &lt;break&gt; and &lt;continue&gt; only work on loops within the interrupt actions.
+                  </xs:documentation>
+                </xs:annotation>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="comment" type="comment" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+
+  <!-- ===== Actions ==== -->
+
+  <xs:group name="specificactions">
+    <xs:choice>
+
+      <xs:element name="dock_masstraffic_drone">
+        <xs:annotation>
+          <xs:documentation>
+            Dock a masstraffic drone. Any picked up objects will be transferred to the cargostorage of destination (if possible). (blocking)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:group ref="blockingaction" />
+          </xs:sequence>
+          <xs:attributeGroup ref="blockingaction" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="destination" type="object" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                Destination the drone should dock at. This object must have masstraffic docks defined! (Large+ ships or stations)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="immediate" type="boolean">
+            <xs:annotation>
+              <xs:documentation>
+                If docking process should happen immediately, the drone will be teleported to destination(optional, defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="commandaction" type="boolean">
+            <xs:annotation>
+              <xs:documentation>
+                If the current command action should be override with this action (optional, defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="execute_custom_trade">
+        <xs:annotation>
+          <xs:documentation>
+            Execute trade procedure, this will create the necessary trade and cause cargo to be transferred from seller to buyer (blocking)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:group ref="blockingaction" />
+          </xs:sequence>
+          <xs:attributeGroup ref="blockingaction"/>
+          <xs:attribute name="buyer" type="buyer" use="required" />
+          <xs:attribute name="seller" type="seller" use="required" />
+          <xs:attribute name="amount" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                Amount of goods to transfer
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="ware" type="ware" use="required" />
+          <xs:attribute name="totalprice" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Total price of goods in this trade (defaults to 0! takes precedence over price)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="price" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Price per unit in this trade (defaults to 0! ignored if totalprice is set)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="unbundle" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Should the ware be unbundled on transfer? (turn ware into ammo for the recipient, defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="trade" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Trade to be removed from shopping list, in case this action is aborted. Accessed by &lt;save_ai_action_state&gt;.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="usecommandermoney" type="boolean">
+            <xs:annotation>
+              <xs:documentation>
+                Use money from the commanders' account to pay for this trade. Defaults to player account for player-owned ships without commander (optional, defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="commandaction" type="boolean">
+            <xs:annotation>
+              <xs:documentation>
+                If the current command action should be overriden with this action (optional, defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="resume" type="resumeflag" />
+          <xs:attribute name="result" type="lvaluename" />
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="execute_recyclable_trade">
+        <xs:annotation>
+          <xs:documentation>
+            Execute trade procedure, this will deliver a recyclable to the specified processing module (blocking)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:group ref="blockingaction" />
+          </xs:sequence>
+          <xs:attributeGroup ref="blockingaction"/>
+          <xs:attribute name="trade" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                The trade deal that is to be acted upon
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="tradepartner" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                The object that wants to deliver the recyclable (if a ship wants to use a trade offer on a station, that station is the owner and the ship is the tradepartner)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="module" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                The processing module that a towed recyclable should be handed over to
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="commandaction" type="boolean">
+            <xs:annotation>
+              <xs:documentation>
+                If the current command action should be overriden with this action (optional, defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="resume" type="resumeflag" />
+          <xs:attribute name="result" type="lvaluename" />
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="execute_trade">
+        <xs:annotation>
+          <xs:documentation>
+            Execute trade procedure, this will cause cargo to be transferred (blocking)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:group ref="blockingaction" />
+          </xs:sequence>
+          <xs:attributeGroup ref="blockingaction"/>
+          <xs:attribute name="tradeoffer" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                The trade offer (buy or sell) that is to be acted upon
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="tradepartner" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                The object that wants to do the trade (if a ship wants to use a trade offer on a station, that station is the owner and the ship is the tradepartner)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="amount" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Amount of goods to transfer, can not exceed amount in offer (0=default=all in offer)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="custom" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Is this using a trade(offer) that is not a Production or Script TradeOffer? (e.g. taken from a Ships' shopping list). Note that you must specify an amount if ware reservations are involved!
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="unbundle" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Should the ware be unbundled on transfer? (turn ware into ammo for the recipient, defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="commandaction" type="boolean">
+            <xs:annotation>
+              <xs:documentation>
+                If the current command action should be overriden with this action (optional, defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="resume" type="resumeflag" />
+          <xs:attribute name="result" type="lvaluename" />
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="move_approach_path">
+        <xs:annotation>
+          <xs:documentation>
+            Move along a dynamic path that will lead to the docking bay (blocking)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:group ref="blockingaction" />
+          </xs:sequence>
+          <xs:attributeGroup ref="blockingaction" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="abortpath" type="booleanexpression" >
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should abort the previous path points if any (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="finishonapproach" type="booleanexpression" />
+          <xs:attribute name="destination" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Destination object (will be derived from docking bay if omitted)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="dock" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                The DockingBay that should be used for docking
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="flightbehaviour" type="fbehaviourlookup" />
+          <xs:attribute name="relativemovement" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should fly in the coordinate space of the defined object as opposed to its parent component (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="torelativemovement" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should start flying in the coordinate space of the defined object as opposed to its parent component after this movement is done (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="forcesteering" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                If this is true the ship will fly on steering flight control model (while in high attention), this is also implictely true if relativemovemt is true or the ship is flying in a formation (defaults to false)
+                Note that, once this is set to true, steering will be the ship's default flight control model until the ship does a stop_moving action or a move_to where forcesteering is set to false.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="commandaction" type="boolean">
+            <xs:annotation>
+              <xs:documentation>
+                If the current command action should be override with this action (optional, defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="move_docking">
+        <xs:annotation>
+          <xs:documentation>
+            Move to dock (blocking)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:group ref="blockingaction" />
+          </xs:sequence>
+          <xs:attributeGroup ref="blockingaction" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="finishonapproach" type="booleanexpression" />
+          <xs:attribute name="abortpath" type="booleanexpression" >
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should abort the previous path points if any (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="dock" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                Docking bay component slot (find using &lt;find_dockingbay&gt;)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="flightbehaviour" type="fbehaviourlookup">
+            <xs:annotation>
+              <xs:documentation>
+                Flight behaviour overrride, defaults to flightbehaviour.dock
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="forcesteering" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                If this is true the ship will fly on steering flight control model (while in high attention), this is also implictely true if the ship is flying in a formation (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="forcerotation" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should keep rotating to match the defined orientation at the end of the path (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="forceposition" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object has to be in the exact given position at the end of the path (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="commandaction" type="boolean">
+            <xs:annotation>
+              <xs:documentation>
+                If the current command action should be override with this action (optional, defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="relativemovementrange" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Range of when to engage relative movement to the dock target, evaluated when the action starts (optional, defaults to 0m, which means infinite relative movement range)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="move_undocking">
+        <xs:annotation>
+          <xs:documentation>
+            Move to undock (blocking)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:group ref="blockingaction" />
+          </xs:sequence>
+          <xs:attributeGroup ref="blockingaction" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="finishonapproach" type="booleanexpression" />
+          <xs:attribute name="dock" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                Docking bay component slot
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="forcerotation" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should keep rotating to match the defined orientation at the end of the path (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="forceposition" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object has to be in the exact given position at the end of the path (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="forcesteering" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                If this is true the ship will fly on steering flight control model (while in high attention), this is also implictely true if the ship is flying in a formation (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="flightbehaviour" type="fbehaviourlookup">
+            <xs:annotation>
+              <xs:documentation>
+                Flight behaviour overrride, defaults to flightbehaviour.dock
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="commandaction" type="boolean">
+            <xs:annotation>
+              <xs:documentation>
+                If the current command action should be override with this action (optional, defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="move_gate">
+        <xs:annotation>
+          <xs:documentation>
+            Move through a Jump Gate, after the transition the ship will move out of the way of the gate (blocking)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:group ref="blockingaction" />
+          </xs:sequence>
+          <xs:attributeGroup ref="blockingaction" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="abortpath" type="booleanexpression" >
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should abort the previous path points if any (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="finishonapproach" type="booleanexpression" />
+          <xs:attribute name="gate" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Jump Gate to go through
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="forcesteering" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                If this is true the ship will fly on steering flight control model (while in high attention), this is also implictely true if the ship is flying in a formation (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="commandaction" type="boolean">
+            <xs:annotation>
+              <xs:documentation>
+                If the current command action should be override with this action (optional, defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="move_navmesh">
+        <xs:annotation>
+          <xs:documentation>
+            Move to destination via navmesh (blocking)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="position" type="position" minOccurs="0" maxOccurs="1" />
+            <xs:element name="rotation" type="rotation" minOccurs="0" maxOccurs="1" />
+            <xs:group ref="blockingaction" />
+          </xs:sequence>
+          <xs:attributeGroup ref="blockingaction" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="abortpath" type="booleanexpression" >
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should abort the previous path points if any (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="finishonapproach" type="booleanexpression" />
+          <xs:attribute name="destination" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                The object that has the navmesh to fly over
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="flightbehaviour" type="fbehaviourlookup" />
+          <xs:attribute name="avoid" type="booleanexpression" />
+          <xs:attribute name="relativemovement" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should fly in the coordinate space of the defined object as opposed to its parent component (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="torelativemovement" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should start flying in the coordinate space of the defined object as opposed to its parent component after this movement is done (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="forcesteering" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                If this is true the ship will fly on steering flight control model (while in high attention), this is also implictely true if relativemovemt is true or the ship is flying in a formation (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="commandaction" type="boolean">
+            <xs:annotation>
+              <xs:documentation>
+                If the current command action should be override with this action (optional, defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="radius" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Radius of the target. Can be used by some flight behaviours (default, -1)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="move_strafe">
+        <xs:annotation>
+          <xs:documentation>
+            Move to destination by strafing (blocking)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="position" type="position" minOccurs="0" maxOccurs="1" />
+            <xs:element name="rotation" type="rotation" minOccurs="0" maxOccurs="1" />
+            <xs:group ref="blockingaction" />
+          </xs:sequence>
+          <xs:attributeGroup ref="blockingaction" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="abortpath" type="booleanexpression" >
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should abort the previous path points if any (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="finishonapproach" type="booleanexpression" />
+          <xs:attribute name="destination" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                Destination object
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="flightbehaviour" type="fbehaviourlookup" />
+          <xs:attribute name="avoid" type="booleanexpression" />
+          <xs:attribute name="forcerotation" type="booleanexpression" />
+          <xs:attribute name="relativemovement" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should fly in the coordinate space of the defined object as opposed to its parent component (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="torelativemovement" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should start flying in the coordinate space of the defined object as opposed to its parent component after this movement is done (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="forcesteering" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                If this is true the ship will fly on steering flight control model (while in high attention), this is also implictely true if relativemovemt is true or the ship is flying in a formation (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="commandaction" type="boolean">
+            <xs:annotation>
+              <xs:documentation>
+                If the current command action should be override with this action (optional, defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="radius" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Radius of the target. Can be used by some flight behaviours (default, -1)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="move_target_points">
+        <xs:annotation>
+          <xs:documentation>
+            Move to destination (blocking)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="nextposition" type="position" minOccurs="0" maxOccurs="1" >
+              <xs:annotation>
+                <xs:documentation>
+                  Next position to look at for the last target point.
+                </xs:documentation>
+              </xs:annotation>
+            </xs:element>
+            <xs:group ref="blockingaction" />
+          </xs:sequence>
+          <xs:attributeGroup ref="blockingaction" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="abortpath" type="booleanexpression" >
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should abort the previous path points if any (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="finishonapproach" type="boolean" />
+          <xs:attribute name="destination" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                Destination object (macro of this object will be used for target point lookup!)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="tags" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Either a single tag or a list of tags which are required for the target points
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="reverse" type="booleanexpression" >
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should fly to the target points in reverse order
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="flightbehaviour" type="fbehaviourlookup" />
+          <xs:attribute name="relativemovement" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should fly in the coordinate space of the defined object as opposed to its parent component (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="torelativemovement" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should start flying in the coordinate space of the defined object as opposed to its parent component after this movement is done (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="forcesteering" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                If this is true the ship will fly on steering flight control model (while in high attention), this is also implictely true if relativemovemt is true or the ship is flying in a formation (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="commandaction" type="boolean">
+            <xs:annotation>
+              <xs:documentation>
+                If the current command action should be override with this action (optional, defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="move_waypoints">
+        <xs:annotation>
+          <xs:documentation>
+            Move to destination using waypoint path (blocking)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="nextposition" type="position" minOccurs="0" maxOccurs="1" >
+              <xs:annotation>
+                <xs:documentation>
+                  Next position to look at for the last waypoint.
+                </xs:documentation>
+              </xs:annotation>
+            </xs:element>
+            <xs:group ref="blockingaction" />
+          </xs:sequence>
+          <xs:attributeGroup ref="blockingaction" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="abortpath" type="booleanexpression" >
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should abort the previous path points if any (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="finishonapproach" type="boolean" />
+          <xs:attribute name="destination" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                Destination object (will be used for waypoint lookup!)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="tags" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Either a single tag or a list of tags which are required for the waypoints
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="starttags" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Either a single tag or a list of tags which are required for the start waypoint
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="grouptag" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Group tag for waypoint path, if omitted the first path found matching tags and starttags is used.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="reverse" type="booleanexpression" >
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should fly to the waypoints in reverse order
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="flightbehaviour" type="fbehaviourlookup" />
+          <xs:attribute name="relativemovement" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should fly in the coordinate space of the defined object as opposed to its parent component (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="torelativemovement" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should start flying in the coordinate space of the defined object as opposed to its parent component after this movement is done (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="forcesteering" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                If this is true the ship will fly on steering flight control model (while in high attention), this is also implictely true if relativemovemt is true or the ship is flying in a formation (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="commandaction" type="boolean">
+            <xs:annotation>
+              <xs:documentation>
+                If the current command action should be override with this action (optional, defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="move_to">
+        <xs:annotation>
+          <xs:documentation>
+            Move to destination (blocking)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="position" type="position" minOccurs="0" maxOccurs="1" />
+            <xs:element name="rotation" type="rotation" minOccurs="0" maxOccurs="1" />
+            <xs:group ref="blockingaction" />
+          </xs:sequence>
+          <xs:attributeGroup ref="blockingaction" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="abortpath" type="booleanexpression" >
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should abort the previous path points if any (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="finishonapproach" type="booleanexpression" >
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should stop if the movement is approaching to finish (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="uselocalhighways" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether local highways should be used (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="useblacklist" type="blacklistgrouplookup" use="optional">
+            <xs:annotation>
+              <xs:documentation>
+                Default faction sector travel blacklist group (civilian, military) to use if object doesn't have a blacklist of its own (does not use any blacklist if null or not supplied)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="useknownpath" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the path should only include sectors known to the object's owner faction (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="destination" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                Destination object or space
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="flightbehaviour" type="fbehaviourlookup" />
+          <xs:attribute name="avoid" type="booleanexpression" />
+          <xs:attribute name="forcerotation" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should keep rotating to match the defined orientation at the end of the path (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="rollintoturns" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should bank into turns while executing this movement. Also rolls to align with ecliptic at the end of the movement. (defaults to true)
+                This should normally be true unless the rotation at the end of the movement is absolutely important.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="forceposition" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object has to be in the exact given position at the end of the path (defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="relativemovement" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should fly in the coordinate space of the defined object as opposed to its parent component (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="torelativemovement" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should start flying in the coordinate space of the defined object as opposed to its parent component after this movement is done (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="forcesteering" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                If this is true the ship will fly on steering flight control model (while in high attention), this is also implictely true if relativemovemt is true or the ship is flying in a formation (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="reverse" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Let the ship fly in reverse (defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="commandaction" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                If the current command action should be override with this action (optional, defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="radius" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Radius of the target. Can be used by the spline flight control model to specify when the event_object_approaching_waypoint will be signaled or by some flight behaviours (default, -1)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="boost" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should boost. The flight control model / behaviour can have the final say over when and if boosting actually happens. (optional, defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="travel" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Whether the object should use travel mode. The flight control model / behaviour can have the final say over when and if travel mode actually happens. (optional, defaults to false)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="endzone" type="lvalueexpression" >
+            <xs:annotation>
+              <xs:documentation>
+                Receives the true target zone that this move_to will end in, may be a tempzone that has just been created so this move_to can end there (optional)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="resume">
+        <xs:annotation>
+          <xs:documentation>
+            Resume at specified label. This is only supported in &lt;actions&gt; and &lt;init&gt;. In global interrupts, use &lt;run_interrupt_script&gt; or &lt;abort_called_scripts&gt; instead.
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="label" type="labelname" use="required" />
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="include_interrupt_actions">
+        <xs:annotation>
+          <xs:documentation>
+            Perform the referenced library interrupt actions in the current script context
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="ref" type="namestring" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                Name of the library interrupt action set
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="return_to_masstraffic">
+        <xs:annotation>
+          <xs:documentation>
+            Instruct object to re-join the mass traffic, only works for ships that came from mass traffic in the first place!
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="object" type="object" use="required" />
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="detach_from_masstraffic">
+        <xs:annotation>
+          <xs:documentation>
+            (blocking) Instruct object to detach from mass traffic, e.g. after executing a trade - OK to call for ships that don't use mass traffic as well
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:group ref="blockingaction" />
+          <xs:attributeGroup ref="blockingaction" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="wait" type="boolean" />
+          <xs:attribute name="commandaction" type="boolean">
+            <xs:annotation>
+              <xs:documentation>
+                If the current command action should be override with this action (optional, defaults to true)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="run_script">
+        <xs:annotation>
+          <xs:documentation>
+            Run script (blocking)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="param" type="run_script_param" minOccurs="0" maxOccurs="unbounded" />
+            <xs:element name="save_retval" minOccurs="0" maxOccurs="unbounded">
+              <xs:annotation>
+                <xs:documentation>
+                  Save named return value in a variable
+                </xs:documentation>
+              </xs:annotation>
+              <xs:complexType>
+                <xs:attribute name="name" type="paramname" use="required">
+                  <xs:annotation>
+                    <xs:documentation>
+                      Return value name
+                    </xs:documentation>
+                  </xs:annotation>
+                </xs:attribute>
+                <xs:attribute name="variable" type="lvaluename" use="required" />
+                <xs:attribute name="comment" type="comment" />
+              </xs:complexType>
+            </xs:element>
+            <!-- No blockingaction elements here -->
+            <!-- <xs:group ref="blockingaction" /> -->
+            <xs:element name="on_attentionchange" minOccurs="0" maxOccurs="1">
+              <xs:annotation>
+                <xs:documentation>
+                  Actions to be performed when called script returns, in case the attention level changed in the meantime. Blocking actions are not allowed. &lt;break&gt; and &lt;continue&gt; only work on loops within the attention change actions.
+                </xs:documentation>
+              </xs:annotation>
+              <xs:complexType>
+                <xs:group ref="actions" />
+                <xs:attribute name="comment" type="comment" />
+              </xs:complexType>
+            </xs:element>
+          </xs:sequence>
+          <xs:attributeGroup ref="blockingaction" />
+          <xs:attribute name="name" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                Script name
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="result" type="lvaluename" />
+        </xs:complexType>
+        <xs:key name="run_script_param_name">
+          <xs:selector xpath="param" />
+          <xs:field xpath="@name" />
+        </xs:key>
+        <xs:key name="run_script_save_retval_name">
+          <xs:selector xpath="save_retval" />
+          <xs:field xpath="@name" />
+        </xs:key>
+      </xs:element>
+
+      <xs:element name="run_order_script">
+        <xs:annotation>
+          <xs:documentation>
+            Run order script (blocking)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <!-- No blockingaction elements here -->
+            <!-- <xs:group ref="blockingaction" /> -->
+            <xs:element name="on_attentionchange" minOccurs="0" maxOccurs="1">
+              <xs:annotation>
+                <xs:documentation>
+                  Actions to be performed when called script returns, in case the attention level changed in the meantime. Blocking actions are not allowed. &lt;break&gt; and &lt;continue&gt; only work on loops within the attention change actions.
+                </xs:documentation>
+              </xs:annotation>
+              <xs:complexType>
+                <xs:group ref="actions" />
+                <xs:attribute name="comment" type="comment" />
+              </xs:complexType>
+            </xs:element>
+          </xs:sequence>
+          <xs:attributeGroup ref="blockingaction" />
+          <xs:attribute name="order" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                AI order to be executed. It must be an object's current order and its state must be orderstate.ready.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="result" type="lvaluename" />
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="run_interrupt_script">
+        <xs:annotation>
+          <xs:documentation>
+            Run a script on a global interrupt. The script will be executed on top of the current call-stack if its interrupt priority is high enough.
+            No further interrupt actions will run after this action. This action is only allowed in global interrupt actions, but not in library actions.
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="param" type="run_script_param" minOccurs="0" maxOccurs="unbounded" />
+          </xs:sequence>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="name" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                Script name
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="abortscripts" type="booleanexpression">
+            <xs:annotation>
+              <xs:documentation>
+                If true then the scripts called by this script will be aborted before the interrupt script is started.
+                If false (default) then the interrupt script will be started on top of the callstack.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="resume" type="labelname">
+            <xs:annotation>
+              <xs:documentation>
+                Label to resume at when the interrupt script returns. By default the script will resume at the current label.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+        <xs:key name="run_interrupt_script_param_name">
+          <xs:selector xpath="param" />
+          <xs:field xpath="@name" />
+        </xs:key>
+      </xs:element>
+
+      <xs:element name="abort_called_scripts">
+        <xs:annotation>
+          <xs:documentation>
+            Abort scripts that were called by this script on a global interrupt. No further interrupt actions will run after this action
+            and this script will resume at the current label. This action is only allowed in global interrupt actions, not in library actions.
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="resume" type="labelname">
+            <xs:annotation>
+              <xs:documentation>
+                Label to resume at after the interrupt. By default the script will resume at the current label.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="wait_for_prev_script">
+        <xs:annotation>
+          <xs:documentation>
+            Wait for blocking action of previous AI script to complete (blocking).
+            Requires information stored on this object via &lt;save_ai_action_state&gt;. Only a few specific blocking actions are handled here, in other cases no blocking happens.
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:group ref="blockingaction" />
+          </xs:sequence>
+          <xs:attributeGroup ref="blockingaction" />
+          <xs:attribute name="action" type="lvalueexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Value that receives the name of the blocking action of the previous script
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="object" type="lvalueexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Value that receives the event source object of the blocking action of the previous script
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="param" type="lvalueexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Value that receives the first parameter of the blocking action of the previous script (depends on the action).
+                For &lt;execute_custom_trade&gt; this is the buyer.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="param2" type="lvalueexpression">
+            <xs:annotation>
+              <xs:documentation>
+                Value that receives the second parameter of the blocking action of the previous script (depends on the action).
+                For &lt;execute_custom_trade&gt; this is the trade.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="select_flight_behaviour">
+        <xs:annotation>
+          <xs:documentation>
+            Randomly select an appropriate flight behaviour for the given entity
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="entity" type="entity" use="required" />
+          <xs:attribute name="evasive" type="boolean" use="required" />
+          <xs:attribute name="result" type="lvaluename" use="required" />
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="set_command">
+        <xs:annotation>
+          <xs:documentation>
+            Sets the current command for the script's entity. The command data will remain valid until either it's overwritten or this script ends. It becomes valid again automatically when a called script returns.
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="command" type="commandlookup" use="required" />
+          <xs:attribute name="param" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Primary command parameter (meaning depends on command)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="param2" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Secondary command parameter (meaning depends on command)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="set_command_action">
+        <xs:annotation>
+          <xs:documentation>
+            Sets the current command action for the script's entity. The command action data will remain valid until either it's overwritten or this script ends. It becomes valid again automatically when a called script returns. The following blocking actions can override it: move_to actions ....
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="commandaction" type="commandactionlookup" use="required" />
+          <xs:attribute name="param" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Primary command action parameter (meaning depends on command action)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="set_flight_behaviour">
+        <xs:annotation>
+          <xs:documentation>
+            Sets the default flight behaviour for this unit (can still be overridden per move_to order)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="flightbehaviour" type="fbehaviourlookup" use="required" />
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="reset_flight_behaviour">
+        <xs:annotation>
+          <xs:documentation>
+            Resets flight behaviour of this unit to flightbehaviour.default (can still be overridden per move_to order)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="object" type="object" use="required" />
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="set_flight_control_model">
+        <xs:annotation>
+          <xs:documentation>
+            Overrides this unit's default flight control model
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="flightcontrolmodel" type="fcmlookup" use="required" />
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="set_to_default_flight_control_model">
+        <xs:annotation>
+          <xs:documentation>
+            Resets the unit to use the default flight control model.
+            If the object is flying in mass traffic, the default FCM will be "masstraffic".
+            If the object is visible, not docked and in a highway, the default FCM will be "highway".
+            If the object is visible, the previous movement operation for the object set the forcesteering-flag to true and the path of the object has not been aborted, the default FCM will be "steering".
+            If the object is visible and any of the other conditions above are not met, the default will be "spline".
+            If the object is not visible, the default FCM will be "linear".
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="clearforcedsteering" type="booleanexpression" use="optional">
+            <xs:annotation>
+              <xs:documentation>
+                Whether this object should clear the forcedsteering-flag that might have been set by a previous movement operation. Defaults to false.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="set_avoid_collisions">
+        <xs:annotation>
+          <xs:documentation>
+            Enables/disabled collision avoidance for this object
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="bigobjects" type="booleanexpression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                Whether this object should use octree path finding to navigate to its target
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="smallobjects" type="booleanexpression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                Whether this object should use dynamically avoid nearby ships of similar or smaller size
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="reset_avoid_collisions">
+        <xs:annotation>
+          <xs:documentation>
+            Resets collision avoidance for this object
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="object" type="object" use="required" />
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="set_flight_assist">
+        <xs:annotation>
+          <xs:documentation>
+            Enables/disables flight assist for this object
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="enabled" type="booleanexpression" use="required" />
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="shoot_at">
+        <xs:annotation>
+          <xs:documentation>
+            Shoot at target when the opportunity arises
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="object" type="attacker" use="required" />
+          <xs:attribute name="target" type="targetobject" use="required" />
+          <xs:attribute name="tolerance" type="expression" use="optional">
+            <xs:annotation>
+              <xs:documentation>
+                Tolerance angle (optional). A positive angle value overrides the default tolerance angle defined in the weapons set to shoot. A non-positive value has no effect.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="additional_targets" type="expression" use="optional">
+            <xs:annotation>
+              <xs:documentation>
+                Optional list of additional targets that may be fired upon if opportunity arises (not supported together with largetarget=true). The object specified by the target attribute must not be in this list (will be ignored and an error will be logged otherwise)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="missiles" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Select between lasers and missile launchers. False for lasers, true for missile launchers. Defaults to false.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="primary" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Shoot weapons in active primary weapon group. Defaults to true.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="secondary" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Shoot weapons in active secondary weapon group. Defaults to true.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="fixedtarget" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Prevent target from being overridden? Default is false
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="largetarget" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Is the target a very large object, e.g. a station? Default is false (does not support additonal targets)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="weaponmode" type="weaponmodelookup">
+            <xs:annotation>
+              <xs:documentation>
+                Only weapons/turrets set to the specified mode will shoot at the target(s), defaults to any.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="stop_moving">
+        <xs:annotation>
+          <xs:documentation>
+            Stop moving
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attributeGroup ref="action" />
+          <xs:attribute name="object" type="object" use="required" />
+          <xs:attribute name="immediate" type="boolean" />
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="wait">
+        <xs:annotation>
+          <xs:documentation>
+            Wait (sleep) for specified time duration (blocking)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:group ref="blockingaction" />
+          <xs:attributeGroup ref="blockingaction" />
+          <xs:attributeGroup ref="random" />
+          <xs:attribute name="resume" type="resumeflag" />
+        </xs:complexType>
+      </xs:element>
+
+    </xs:choice>
+  </xs:group>
+
+  <xs:group name="actionchoice">
+    <xs:choice>
+      <xs:element name="do_all" type="doall"/>
+      <xs:element name="do_for_each" type="doforeach" />
+      <xs:element name="do_any" type="doany"/>
+      <xs:sequence>
+        <xs:element name="do_if" type="doif" />
+        <xs:element name="do_elseif" type="doelseif" minOccurs="0" maxOccurs="unbounded" />
+        <xs:element name="do_else" type="doelse" minOccurs="0" maxOccurs="1" />
+      </xs:sequence>
+      <xs:element name="do_while" type="dowhile"/>
+      <xs:group ref="commonactions"/>
+      <xs:group ref="specificactions"/>
+    </xs:choice>
+  </xs:group>
+
+  <xs:group name="actions">
+    <xs:sequence>
+      <xs:group ref="actionchoice" minOccurs="0" maxOccurs="unbounded" />
+    </xs:sequence>
+  </xs:group>
+
+  <xs:group name="actionswithlabel">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="actionchoice"/>
+
+        <xs:element name="label">
+          <xs:annotation>
+            <xs:documentation>
+              Label
+            </xs:documentation>
+          </xs:annotation>
+          <xs:complexType>
+            <xs:attribute name="name" type="labelname" use="required" />
+          </xs:complexType>
+        </xs:element>
+
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+
+  <xs:complexType name="actions">
+    <xs:annotation>
+      <xs:documentation>
+        AI script actions
+      </xs:documentation>
+    </xs:annotation>
+    <xs:group ref="actionswithlabel" />
+    <xs:attribute name="comment" type="comment" />
+  </xs:complexType>
+
+  <xs:complexType name="doall">
+    <xs:annotation>
+      <xs:documentation>
+        Actions in all sub-nodes will be performed.
+      </xs:documentation>
+    </xs:annotation>
+    <xs:group ref="actions"/>
+    <xs:attributeGroup ref="action"/>
+    <xs:attributeGroup ref="counting"/>
+  </xs:complexType>
+
+  <xs:complexType name="doforeach">
+    <xs:annotation>
+      <xs:documentation>
+        Traverse a list, group or table. For each element (or table key), the actions in the sub-nodes will be performed. The keyword 'loop' can be used in expressions to access data of the current iteration.
+      </xs:documentation>
+    </xs:annotation>
+    <xs:group ref="actions"/>
+    <xs:attributeGroup ref="action"/>
+    <xs:attributeGroup ref="foreach"/>
+  </xs:complexType>
+
+  <xs:complexType name="doany">
+    <xs:annotation>
+      <xs:documentation>
+        A randomly selected sub-node action will be performed. The chances of selection can be specified by using weights on the actions.
+      </xs:documentation>
+    </xs:annotation>
+    <xs:group ref="actions"/>
+    <xs:attributeGroup ref="action"/>
+  </xs:complexType>
+
+  <xs:complexType name="doif">
+    <xs:annotation>
+      <xs:documentation>
+        Actions in sub-nodes will be performed only if the value matches.
+        Can be followed by &lt;do_elseif&gt; and/or &lt;do_else&gt;.
+      </xs:documentation>
+    </xs:annotation>
+    <xs:group ref="actions"/>
+    <xs:attributeGroup ref="action"/>
+    <xs:attributeGroup ref="conditionalaction"/>
+  </xs:complexType>
+
+  <xs:complexType name="doelseif">
+    <xs:annotation>
+      <xs:documentation>
+        Actions in sub-nodes will be performed only if the conditions in the previous nodes are not met and if this action's values matches.
+        Can be followed by &lt;do_elseif&gt; and/or &lt;do_else&gt;.
+      </xs:documentation>
+    </xs:annotation>
+    <xs:group ref="actions"/>
+    <xs:attributeGroup ref="action"/>
+    <xs:attributeGroup ref="conditionalaction"/>
+  </xs:complexType>
+
+  <xs:complexType name="doelse">
+    <xs:annotation>
+      <xs:documentation>
+        Actions in sub-nodes will be performed only if the conditions in the previous nodes are not met.
+      </xs:documentation>
+    </xs:annotation>
+    <xs:group ref="actions"/>
+    <xs:attributeGroup ref="action"/>
+  </xs:complexType>
+
+  <xs:complexType name="dowhile">
+    <xs:annotation>
+      <xs:documentation>
+        Actions in sub-nodes will be performed in a loop while the value matches.
+      </xs:documentation>
+    </xs:annotation>
+    <xs:group ref="actions"/>
+    <xs:attributeGroup ref="action"/>
+    <xs:attributeGroup ref="conditionalaction"/>
+  </xs:complexType>
+
+  <!-- ===== Interrupts ===== -->
+
+  <!-- Interrupt conditions -->
+  <xs:complexType name="interrupt_conditions">
+    <xs:group ref="conditions" />
+    <xs:attribute name="comment" type="comment" />
+  </xs:complexType>
+
+  <xs:complexType name="interrupt_conditions_withref">
+    <xs:complexContent>
+      <xs:extension base="interrupt_conditions">
+        <xs:attribute name="ref" type="interrupt_conditionsref" />
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+
+  <xs:complexType name="interrupt_actions">
+    <xs:group ref="actions" />
+    <xs:attribute name="comment" type="comment" />
+  </xs:complexType>
+
+  <xs:complexType name="interrupt_actions_withref">
+    <xs:complexContent>
+      <xs:extension base="interrupt_actions">
+        <xs:attribute name="ref" type="interrupt_actionsref" />
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+
+  <!-- Interrupt handler -->
+  <xs:complexType name="interrupt_handler">
+    <xs:sequence>
+      <xs:element name="conditions" type="interrupt_conditions_withref" minOccurs="0" maxOccurs="1">
+        <xs:annotation>
+          <xs:documentation>
+            Conditions that must be met in order for the global interrupt to occur.
+          </xs:documentation>
+        </xs:annotation>
+      </xs:element>
+      <xs:element name="actions" type="interrupt_actions_withref" minOccurs="0" maxOccurs="1">
+        <xs:annotation>
+          <xs:documentation>
+            Actions to be performed on the global interrupt. Blocking actions are not allowed. &lt;break&gt; and &lt;continue&gt; only work on loops within the interrupt actions.
+          </xs:documentation>
+        </xs:annotation>
+      </xs:element>
+    </xs:sequence>
+    <xs:attribute name="consume" type="boolean">
+      <xs:annotation>
+        <xs:documentation>
+          Will the interrupt event be consumed by this handler when the conditions are met, preventing it from triggering further handlers in this script callstack?
+          Default is true - set to false to allow the event to be passed on, so that multiple handlers in the callstack can be triggered simultaneously.
+          Note that handlers are first triggered in the current script, then in the caller, and so on. The event processing stops as soon as a handler consumes the event.
+          Interrupt actions are always deferred until after the event processing.
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="comment" type="comment" />
+  </xs:complexType>
+
+  <xs:complexType name="interrupt_handler_withref">
+    <xs:annotation>
+      <xs:documentation>
+        Global interrupt handler for this AI script and any called scripts. Can reference a library interrupt handler.
+      </xs:documentation>
+    </xs:annotation>
+    <xs:complexContent>
+      <xs:extension base="interrupt_handler">
+        <xs:attribute name="ref" type="interrupt_handlerref" />
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+
+  <xs:complexType name="interrupt_library">
+    <xs:annotation>
+      <xs:documentation>
+        Library of named interrupts and interrupt conditions in global namespace
+      </xs:documentation>
+    </xs:annotation>
+    <!-- Named conditions and named handlers -->
+    <xs:choice minOccurs="0" maxOccurs="unbounded">
+      <xs:element name="handler">
+        <xs:annotation>
+          <xs:documentation>
+            Library definition of a global interrupt handler. Can be referenced by any AI script.
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:complexContent>
+            <xs:extension base="interrupt_handler">
+              <xs:attribute name="name" type="namestring" use="required">
+                <xs:annotation>
+                  <xs:documentation>
+                    Globally unique handler name
+                  </xs:documentation>
+                </xs:annotation>
+              </xs:attribute>
+            </xs:extension>
+          </xs:complexContent>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="conditions">
+        <xs:annotation>
+          <xs:documentation>
+            Library definition of conditions that must be met in order for an interrupt to occur. Can be referenced by interrupt handlers in any AI script.
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:complexContent>
+            <xs:extension base="interrupt_conditions">
+              <xs:attribute name="name" type="namestring" use="required">
+                <xs:annotation>
+                  <xs:documentation>
+                    Globally unique condition set name
+                  </xs:documentation>
+                </xs:annotation>
+              </xs:attribute>
+            </xs:extension>
+          </xs:complexContent>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="actions">
+        <xs:annotation>
+          <xs:documentation>
+            Library definition of actions that can be referenced by interrupts or by &lt;include_interrupt_actions&gt; in any AI script.
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:complexContent>
+            <xs:extension base="interrupt_actions">
+              <xs:attribute name="name" type="namestring" use="required">
+                <xs:annotation>
+                  <xs:documentation>
+                    Globally unique action set name
+                  </xs:documentation>
+                </xs:annotation>
+              </xs:attribute>
+            </xs:extension>
+          </xs:complexContent>
+        </xs:complexType>
+      </xs:element>
+    </xs:choice>
+  </xs:complexType>
+
+  <xs:complexType name="interrupts">
+    <xs:annotation>
+      <xs:documentation>
+        Global interrupt handlers and library definitions
+      </xs:documentation>
+    </xs:annotation>
+    <xs:sequence>
+      <xs:element name="library" type="interrupt_library" minOccurs="0" maxOccurs="1" />
+      <xs:element name="handler" type="interrupt_handler_withref" minOccurs="0" maxOccurs="unbounded" />
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ===== Order ===== -->
+
+  <xs:simpleType name="ordercategorylookup">
+    <xs:annotation>
+      <xs:documentation>
+        Order category type
+      </xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="internal" />
+      <xs:enumeration value="navigation" />
+      <xs:enumeration value="combat" />
+      <xs:enumeration value="trade" />
+      <xs:enumeration value="mining" />
+      <xs:enumeration value="coordination" />
+      <xs:enumeration value="salvage"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="orderparamlookup">
+    <xs:annotation>
+      <xs:documentation>
+        Order parameter type
+      </xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="internal">
+        <xs:annotation>
+          <xs:documentation>
+            Internal parameter that is hidden in the UI. Parameters of this type must be optional, i.e. have a default value.
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="bool">
+        <xs:annotation>
+          <xs:documentation>
+            Boolean parameter
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="number">
+        <xs:annotation>
+          <xs:documentation>
+            Untyped number input from slider (input param "max" required)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="length">
+        <xs:annotation>
+          <xs:documentation>
+            Length input from slider (input param "max" required)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="time">
+        <xs:annotation>
+          <xs:documentation>
+            Time input from slider (input param "max" required)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="money">
+        <xs:annotation>
+          <xs:documentation>
+            Money input from slider (input param "max" required)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="object">
+        <xs:annotation>
+          <xs:documentation>
+            Object selected by player
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="space">
+        <xs:annotation>
+          <xs:documentation>
+            Space selected by player
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="position">
+        <xs:annotation>
+          <xs:documentation>
+            Position in space, result is [$space, $position]
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="ware">
+        <xs:annotation>
+          <xs:documentation>
+            Ware selected by player
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="trade">
+        <xs:annotation>
+          <xs:documentation>
+            Trade deal selected by player (including trade partner, ware, amount and price - only to be used in special trade orders)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="build">
+        <xs:annotation>
+          <xs:documentation>
+            Build task selected by player (only to be used in special build orders)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="formationshape">
+        <xs:annotation>
+          <xs:documentation>
+            Formation shape selected by player
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="list">
+        <xs:annotation>
+          <xs:documentation>
+            A list of any other order parameter type (input param "type" is required, additional input params for that type are valid)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="macro">
+        <xs:annotation>
+          <xs:documentation>
+            Macro
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="sector">
+        <xs:annotation>
+          <xs:documentation>
+            A sector selected by the player
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="orderinputparamlookup">
+    <xs:restriction base="namestring">
+      <xs:enumeration value="type">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for list: Type of the list elements
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="uitype">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for internal type: Type for setting values from UI
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="step">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for number/length/time/money, default is 1
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="min">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for number/length/time/money, default is 0
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="max">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for number/length/time/money
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="startvalue">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for number/length/time/money/position, start value for selection in UI (of same type as the expected result)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="class">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (list of allowed classes) and position (expected result space class, class.zone or class.sector)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="isdeployable">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean, for selecting object that is a deployable)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="context">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object/position (space or container)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="owner">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (faction)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="excludeself">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean, for preventing current object from being selected, default is true)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="mining">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (ware transport type, for selecting object with mining capability) and ware (zone, for selecting mining resources)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="attackcapacity">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean, whether object can attack)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="canbedismantled">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean, whether an object can be dismantled)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="canbetowed">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean, whether an object can be towed)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="cargocapacity">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean or ware transport type, for selecting object with appropriate cargo storage)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="hascargo">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean or ware, for selecting object with cargo)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="canbecommanderof">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (controllable, for selecting object that can be commander of the controllable)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="unitcapacity">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean, for selecting object with unit storage)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="issubordinate">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="hasorders">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="hascontrolentity">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="hasbuildmodule">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="hasbuildingmodule">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean, for selecting object that is target of a buildmodule)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="hasbuyoffer">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean or ware)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="hasselloffer">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean or ware)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="isbuilding">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="isconstruction">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for object (boolean, for selecting object in state construction)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="cargoof">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for ware (container, for selecting cargo of given container)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="boughtby">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for ware (container, for selecting ware that the container has buy offers for)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="soldby">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for ware (container, for selecting ware that the container has sell offers for)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="cancarry">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for ware (container, for selecting ware that the container can carry)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="isminable">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for ware (boolean, for selecting a minable ware)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="falsevalue">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for bool (if false parameter is set to value)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="truevalue">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for bool (if true parameter is set to value)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="hasresources">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for sector (ware list, any has to be a resource in the selected sector)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="playerreadonly">
+        <xs:annotation>
+          <xs:documentation>
+            Valid for any param type (boolean; if true, parameter can not be changed in the UI; defaults to false)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="canplayeroverride">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for ware lists (boolean, letting the player override an automatic ware basket with a whitelist. Add internal order parameter with name "$name$_override".)
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+      <xs:enumeration value="optionsource">
+        <xs:annotation>
+          <xs:documentation>
+            Valid input param for lists (string, source of options to select from, needs to fit the list type. 'ware': "commanderwarebasket")
+          </xs:documentation>
+        </xs:annotation>
+      </xs:enumeration>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="orderdefpatch">
+    <xs:annotation>
+      <xs:documentation>
+        Patch instruction to replace the parameter of each matching existing order of an older version (will be applied when loading the order from a save).
+        Note that this can also be necessary when adding an order parameter in a new script version, so existing orders from older saves are updated properly.
+        By default, when parameters are added to existing orders, they get the null value, NOT the value specified in the default attribute.
+        NOTE: When a patch is applied to an order parameter, a running order is not reset automatically. If that is desired, use script &lt;patch&gt; actions instead or additionally.
+        This patch is applied before script patch actions of the same "early" type are performed, so e.g. early parameter patches are applied before early patch actions.
+      </xs:documentation>
+    </xs:annotation>
+    <xs:attribute name="sinceversion" use="required" type="xs:positiveInteger">
+      <xs:annotation>
+        <xs:documentation>
+          Script version at which this patch element was added (it will only be applied when loading an order script of an older version)
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="state" type="orderstatelookup">
+      <xs:annotation>
+        <xs:documentation>
+          Required state that this order must be in for this patch to be applied (default is any state)
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="early" type="boolean">
+      <xs:annotation>
+        <xs:documentation>
+          If true, the parameter will be patched as early as possible while importing the order, before setting up global interrupt events.
+          If false or omitted, the patch will be applied only when the savegame is fully loaded.
+          With early=&quot;true&quot; accessing and manipulating other objects is not safe, because at that point the game is not fully loaded yet.
+          However, this is useful for updating a parameter variable that is required for global interrupt events.
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="setvariable" type="boolean">
+      <xs:annotation>
+        <xs:documentation>
+          If true, the corresponding parameter variable of a running order script is updated to the new value as well, or is created if it does not exist already.
+          This is a shortcut for a &lt;patch&gt; action block that sets the variable to the new parameter value. (Otherwise the parameter and the script variable may have different values.)
+          Default is true. This has no effect if the order script is not currently running, or if the script was called directly via &lt;run_script&gt; instead of an order.
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="condition" type="expression">
+      <xs:annotation>
+        <xs:documentation>
+          Optional condition expression. If the condition is not met then the parameter will not be patched. The expression is evaluated in the same context as the value (see the value documentation).
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="value" type="expression" use="required">
+      <xs:annotation>
+        <xs:documentation>
+          New value to be assigned to the parameter and, if requested with the setvariable attribute, also to the corresponding script variable.
+          The expression is evaluated in the context of the running order script if available, including full variable access.
+          NOTE: For orders that are not currently running, the restrictions of parameter setup also apply here (see the &lt;order&gt; documentation),
+          and the $variable notation provides access to the current order parameters, not to a variable of a running script.
+          To make changes that should only apply to a running script, use script &lt;patch&gt; actions instead.
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="comment" type="comment" />
+  </xs:complexType>
+
+  <xs:complexType name="orderdef">
+    <xs:annotation>
+      <xs:documentation>
+        Definition of an order, determining this AI script as the associated order script. Script parameters must be defined as order parameters.
+        NOTE: During setup of order parameters, the script keyword &quot;this&quot; is only partially supported since the entity is not determined yet.
+        &quot;this&quot; can only be used to access the following properties: exists, controllable, controlled, assignedcontrolled, object, defensible, container, station, ship, zone, sector, cluster.
+        For example, &quot;this.assignedcontrolled&quot; and &quot;this.zone&quot; are always supported, but &quot;this.type&quot; will not work until the script has started.
+        NOTE: The properties object, controllable, controlled and assignedcontrolled are synonymous before the script is started; they refer to the object that the order belongs to.
+      </xs:documentation>
+    </xs:annotation>
+    <xs:sequence>
+      <xs:element name="params" minOccurs="0" maxOccurs="1">
+        <xs:annotation>
+          <xs:documentation>
+            Order parameters (AI script parameters with additional order-related properties)
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:sequence minOccurs="0" maxOccurs="unbounded">
+            <xs:element name="param">
+              <xs:annotation>
+                <xs:documentation>
+                  AI order script parameter
+                </xs:documentation>
+              </xs:annotation>
+              <xs:complexType>
+                <xs:sequence>
+                  <xs:element name="input_param" minOccurs="0" maxOccurs="unbounded">
+                    <xs:annotation>
+                      <xs:documentation>
+                        Internal parameter required by the UI for player input of this order parameter. The order parameter type determines which input parameters are expected.
+                      </xs:documentation>
+                    </xs:annotation>
+                    <xs:complexType>
+                      <xs:attribute name="name" type="orderinputparamlookup" use="required">
+                        <xs:annotation>
+                          <xs:documentation>
+                            Input parameter name
+                          </xs:documentation>
+                        </xs:annotation>
+                      </xs:attribute>
+                      <xs:attribute name="value" type="expression">
+                        <xs:annotation>
+                          <xs:documentation>
+                            Input parameter value
+                          </xs:documentation>
+                        </xs:annotation>
+                      </xs:attribute>
+                      <xs:attribute name="comment" type="comment" />
+                    </xs:complexType>
+                  </xs:element>
+                  <xs:element name="editable" minOccurs="0" maxOccurs="1">
+                    <xs:annotation>
+                      <xs:documentation>
+                        Declares that the script is capable of handling an &quot;edit&quot; event for this parameter while in the &quot;critical&quot; state, provided
+                        that the defined edit conditions are met. This declaration only affects the critical state, as all parameters are editable anyway in the started (non-critical) state.
+                      </xs:documentation>
+                    </xs:annotation>
+                    <xs:complexType>
+                      <xs:sequence>
+                        <xs:element name="conditions" minOccurs="0" maxOccurs="1">
+                          <xs:annotation>
+                            <xs:documentation>
+                              Non-event conditions that determine whether editing the parameter is currently possible. The checks are triggered by the UI or by the script system (e.g. &lt;edit_order_param&gt;) when necessary.
+                            </xs:documentation>
+                          </xs:annotation>
+                          <xs:complexType>
+                            <xs:group ref="conditions_nonevent" minOccurs="0" maxOccurs="unbounded" />
+                            <xs:attribute name="comment" type="comment" />
+                          </xs:complexType>
+                        </xs:element>
+                        <xs:element name="actions" type="interrupt_actions_withref" minOccurs="0" maxOccurs="1">
+                          <xs:annotation>
+                            <xs:documentation>
+                              Actions to be performed immediately when the player or a script edits the parameter. The provided event.* properties are the same as for &lt;event_object_order_param_edited&gt;.
+                              Interrupt-specific actions (&lt;run_interrupt_script&gt;, &lt;abort_called_scripts&gt;) are not supported.
+                              To perform interrupt actions, the script needs to define an actual interrupt handler and listen to &lt;event_object_order_param_edited&gt;.
+                            </xs:documentation>
+                          </xs:annotation>
+                        </xs:element>
+                      </xs:sequence>
+                    </xs:complexType>
+                  </xs:element>
+                  <xs:element name="patch" type="orderdefpatch" minOccurs="0" maxOccurs="unbounded" />
+                  <xs:element name="patches" minOccurs="0" maxOccurs="unbounded">
+                    <xs:annotation>
+                      <xs:documentation>
+                        Grouped set of patch nodes (grouping is for convenience/readability only)
+                      </xs:documentation>
+                    </xs:annotation>
+                    <xs:complexType>
+                      <xs:sequence>
+                        <xs:element name="patch" type="orderdefpatch" minOccurs="0" maxOccurs="unbounded" />
+                      </xs:sequence>
+                    </xs:complexType>
+                  </xs:element>
+                </xs:sequence>
+                <xs:attribute name="name" type="paramname" use="required">
+                  <xs:annotation>
+                    <xs:documentation>
+                      Parameter name
+                    </xs:documentation>
+                  </xs:annotation>
+                </xs:attribute>
+                <xs:attribute name="type" type="orderparamlookup" use="required" />
+                <xs:attribute name="text" type="xs:string">
+                  <xs:annotation>
+                    <xs:documentation>
+                      Localised parameter name displayed in the UI
+                    </xs:documentation>
+                  </xs:annotation>
+                </xs:attribute>
+                <xs:attribute name="default" type="expression">
+                  <xs:annotation>
+                    <xs:documentation>
+                      Default value. If required=&quot;false&quot; then a default value must be supplied.
+                      If user input is required, a default value does not have to be supplied, but if it is, it may be taken into account by the UI.
+                    </xs:documentation>
+                  </xs:annotation>
+                </xs:attribute>
+                <xs:attribute name="infinitevalue" type="expression">
+                  <xs:annotation>
+                    <xs:documentation>
+                      Special constant value that marks the order as infinite. In other words, if the parameter value matches this value, the order becomes an infinite order.
+                      Infinite orders in the order queue have special behaviors (see infinite attribute of &lt;order&gt; element). The existence of this attribute also allows
+                      the user to create this order as a default order (which must be infinite). In this case, this order parameter is hidden from the UI, it is automatically
+                      initialised to the the infinitevalue, and the attributes "default" and "required" have no effect.
+                    </xs:documentation>
+                  </xs:annotation>
+                </xs:attribute>
+                <xs:attribute name="required" type="boolean">
+                  <xs:annotation>
+                    <xs:documentation>
+                      Is parameter input by user required? Default is true, unless a default value is provided. If false then the input UI is skipped (but parameter may be edited by the user later)
+                    </xs:documentation>
+                  </xs:annotation>
+                </xs:attribute>
+                <xs:attribute name="advanced" type="boolean">
+                  <xs:annotation>
+                    <xs:documentation>
+                      Is UI visibility of the parameter restricted to the advanced UI mode? Default is false (parameter is always visible). An advanced parameter must be neither required nor internal.
+                    </xs:documentation>
+                  </xs:annotation>
+                </xs:attribute>
+                <xs:attribute name="comment" type="comment" />
+              </xs:complexType>
+            </xs:element>
+          </xs:sequence>
+        </xs:complexType>
+        <xs:key name="aiscript_order_param_name">
+          <xs:selector xpath="param" />
+          <xs:field xpath="@name" />
+        </xs:key>
+      </xs:element>
+      <xs:element name="skill" minOccurs="0" maxOccurs="1">
+        <xs:annotation>
+          <xs:documentation>
+            Skill requirement for the pilot of a player-owned ship, to determine whether this order is selectable in the UI. The UI will check this requirement
+            when selecting a default order. To prevent exploits, the default order is supposed to get cleared when the player changes the ship's pilot.
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attribute name="min" type="xs:nonNegativeInteger" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                Minimal required combined skill value
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="requires" minOccurs="0" maxOccurs="unbounded">
+        <xs:annotation>
+          <xs:documentation>
+            Filter criteria to determine for a player-owned object whether this order is selectable in the UI. For the case of an unselectable order,
+            the reason can be provided as TextDB reference in the text attribute. There can be multiple elements of this type with different reason texts.
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:complexContent>
+            <xs:extension base="matchbase">
+              <xs:attributeGroup ref="findobject" />
+              <xs:attribute name="text" type="textdbref">
+                <xs:annotation>
+                  <xs:documentation>
+                    Reason for the order not being selectable (TextDB reference)
+                  </xs:documentation>
+                </xs:annotation>
+              </xs:attribute>
+              <xs:attribute name="comment" type="comment" />
+            </xs:extension>
+          </xs:complexContent>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="location" minOccurs="0" maxOccurs="unbounded">
+        <xs:annotation>
+          <xs:documentation>
+            Location definition for visualisation in the UI. The location may be queried by the UI at any time after the order is set up.
+            There can be multiple subsequent location elements, and each location element can have a condition. In this case, for each location element
+            the condition is evaluated until a valid location element is found, which will then be used.
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attribute name="condition" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Optional condition expression. If the condition is not met then this location element is regarded as invalid.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="early" type="boolean">
+            <xs:annotation>
+              <xs:documentation>
+                Should the location element be available even if there are parameters that have not been set up in the UI yet? Default is false.
+                Note that the location definition still relies on certain parameters, so the condition expression is required to check for the
+                existence of these parameters, e.g. condition=&quot;$object?&quot;.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="object" type="expression" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                Reference object or space of the location
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="additionalobjects" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Additional location objects (can be null or omitted, otherwise it must be a list or group of objects). Cannot be combined with position.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="position" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Position (offset) relative to the reference object or space (can be null or omitted). Cannot be combined with additionalobjects.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="radius" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Radius around order location (can be zero or omitted)
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="comment" type="comment" />
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="icon" minOccurs="0" maxOccurs="unbounded">
+        <xs:annotation>
+          <xs:documentation>
+            Icon override for visualisation in the UI, overriding the default icon for this order (based on the order ID). The icon may be queried by the UI at any time after the order is set up.
+            There can be multiple subsequent icon elements, and each icon element can have a condition. In this case, for each icon element
+            the condition is evaluated until a valid icon element is found, which will then be used.
+          </xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:attribute name="name" type="namestring" use="required">
+            <xs:annotation>
+              <xs:documentation>
+                Icon name
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="condition" type="expression">
+            <xs:annotation>
+              <xs:documentation>
+                Optional condition expression. If the condition is not met then this icon element is ignored.
+              </xs:documentation>
+            </xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="comment" type="comment" />
+        </xs:complexType>
+      </xs:element>
+    </xs:sequence>
+    <xs:attribute name="id" type="idname">
+      <xs:annotation>
+        <xs:documentation>
+          Globally unique order ID
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="name" type="expression">
+      <xs:annotation>
+        <xs:documentation>
+          Localised order name displayed in the UI
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="description" type="expression">
+      <xs:annotation>
+        <xs:documentation>
+          Localised order description displayed in the UI
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="infinite" type="boolean">
+      <xs:annotation>
+        <xs:documentation>
+          Is this an infinite order? Default is false. Infinite orders in the order queue have a theoretically infinite duration, but they have special termination conditions:
+          If a sync point exists, the order terminates when the order has reached the sync point and it is released, otherwise it terminates when a next order is ready in the queue.
+          Even if the infinite attribute value is false, this order can become infinite if there is a param element with an infinitevalue attribute.
+          Default orders must be infinite since they should not terminate until another order is ready. Any order with an infinite or infinitevalue attribute can be used as default order.
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="canplayercancel" type="boolean">
+      <xs:annotation>
+        <xs:documentation>
+          Allows the order to be cancelled by specific player actions even if it is in the critical state (default is false).
+          This causes the order script to be aborted like in the non-critical case. The script has to clean up the order state
+          in the on_abort node. Note that usually the critical state indicates an irreversible process that cannot be cancelled.
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="category" type="ordercategorylookup" />
+    <xs:attribute name="allowinloop" type="boolean">
+      <xs:annotation>
+        <xs:documentation>
+          Whether the player can add this order to an order loop (default is true).
+          NOTE: Trade, build and operation orders are not allowed in a loop, no matter what value is provided in this attribute.
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+  </xs:complexType>
+
+  <xs:complexType name="aiscriptpatch">
+    <xs:annotation>
+      <xs:documentation>
+        Non-blocking AI script actions for patching a script of an older version (will be performed when loading the script from a save)
+      </xs:documentation>
+    </xs:annotation>
+    <xs:group ref="actions" />
+    <xs:attribute name="sinceversion" use="required" type="xs:positiveInteger">
+      <xs:annotation>
+        <xs:documentation>
+          Script version at which this patch element was added (it will only be applied when loading a script of an older version)
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="early" type="boolean">
+      <xs:annotation>
+        <xs:documentation>
+          If true, the patch actions will be performed as early as possible while importing the script, before setting up global interrupt events.
+          If false or omitted, the patch actions will be performed only when the savegame is fully loaded.
+          With early=&quot;true&quot; accessing and manipulating other objects is not safe, because at that point the game is not fully loaded yet.
+          However, this is useful for setting up variables that are required for global interrupt events.
+        </xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="comment" type="comment" />
+  </xs:complexType>
+
+  <!-- ===== Root element ==== -->
+
+  <xs:element name="aiscript">
+    <xs:annotation>
+      <xs:documentation>
+        AI Script root element
+      </xs:documentation>
+    </xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="documentation" type="filedoc" minOccurs="0" maxOccurs="1" />
+        <xs:choice minOccurs="0" maxOccurs="1">
+          <xs:element name="order" type="orderdef" />
+          <xs:element name="params">
+            <xs:complexType>
+              <xs:sequence minOccurs="0" maxOccurs="unbounded">
+                <xs:element name="param">
+                  <xs:annotation>
+                    <xs:documentation>
+                      AI script parameter
+                    </xs:documentation>
+                  </xs:annotation>
+                  <xs:complexType>
+                    <xs:attribute name="name" type="paramname" use="required">
+                      <xs:annotation>
+                        <xs:documentation>
+                          Parameter name
+                        </xs:documentation>
+                      </xs:annotation>
+                    </xs:attribute>
+                    <xs:attribute name="default" type="expression">
+                      <xs:annotation>
+                        <xs:documentation>
+                          Default value (parameter is required if default value not supplied)
+                        </xs:documentation>
+                      </xs:annotation>
+                    </xs:attribute>
+                    <xs:attribute name="comment" type="comment" />
+                  </xs:complexType>
+                </xs:element>
+              </xs:sequence>
+            </xs:complexType>
+            <xs:key name="aiscript_param_name">
+              <xs:selector xpath="param" />
+              <xs:field xpath="@name" />
+            </xs:key>
+          </xs:element>
+        </xs:choice>
+        <xs:element name="interrupts" type="interrupts" minOccurs="0" maxOccurs="1" />
+        <xs:element name="init" minOccurs="0" maxOccurs="1">
+          <xs:annotation>
+            <xs:documentation>
+              Non-blocking AI script actions for initialization (will be performed immediately when the script is started, before setting up global interrupt events)
+            </xs:documentation>
+          </xs:annotation>
+          <xs:complexType>
+            <xs:group ref="actions" />
+            <xs:attribute name="comment" type="comment" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="patch" type="aiscriptpatch" minOccurs="0" maxOccurs="unbounded" />
+        <xs:element name="patches" minOccurs="0" maxOccurs="unbounded">
+          <xs:annotation>
+            <xs:documentation>
+              Grouped set of patch nodes (grouping is for convenience/readability only)
+            </xs:documentation>
+          </xs:annotation>
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="patch" type="aiscriptpatch" minOccurs="0" maxOccurs="unbounded" />
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="actions" type="actions" minOccurs="0" maxOccurs="1">
+          <xs:key name="label_name">
+            <xs:selector xpath="label" />
+            <xs:field xpath="@name" />
+          </xs:key>
+          <xs:keyref name="resume_label" refer="label_name">
+            <xs:selector xpath=".//resume" />
+            <xs:field xpath="@label" />
+          </xs:keyref>
+        </xs:element>
+        <xs:element name="attention" minOccurs="0" maxOccurs="unbounded">
+          <xs:annotation>
+            <xs:documentation>
+              Actions for minimum attention level
+            </xs:documentation>
+          </xs:annotation>
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="actions" type="actions">
+                <xs:key name="attention_label_name">
+                  <xs:selector xpath="label" />
+                  <xs:field xpath="@name" />
+                </xs:key>
+                <xs:keyref name="attention_resume_label" refer="attention_label_name">
+                  <xs:selector xpath=".//resume" />
+                  <xs:field xpath="@label" />
+                </xs:keyref>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="min" type="attentionlookup" use="required">
+              <xs:annotation>
+                <xs:documentation>
+                  Minimum attention level
+                </xs:documentation>
+              </xs:annotation>
+            </xs:attribute>
+            <xs:attribute name="comment" type="comment" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="on_abort" minOccurs="0" maxOccurs="1">
+          <xs:annotation>
+            <xs:documentation>
+              Non-blocking AI script actions for cleanup, in case the script is aborted (will be performed right before the script is terminated).
+              If the script is aborted as a result of the entity being killed, the event data of &lt;event_object_destroyed&gt; can be accessed.
+            </xs:documentation>
+          </xs:annotation>
+          <xs:complexType>
+            <xs:group ref="actions" />
+            <xs:attribute name="killed" type="boolean">
+              <xs:annotation>
+                <xs:documentation>
+                  Set to true if the actions should only be performed if the entity is killed.
+                </xs:documentation>
+              </xs:annotation>
+            </xs:attribute>
+            <xs:attribute name="comment" type="comment" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="signature" minOccurs="0" maxOccurs="1">
+          <xs:annotation>
+            <xs:documentation>
+              Signature
+            </xs:documentation>
+          </xs:annotation>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="name" type="aiscriptname" use="required" />
+      <xs:attribute name="priority" type="xs:nonNegativeInteger">
+        <xs:annotation>
+          <xs:documentation>
+            The interrupt priority. In order for this script to be triggered by a global interrupt handler, this priority must be higher than the previous interrupt priority (default is 0).
+          </xs:documentation>
+        </xs:annotation>
+      </xs:attribute>
+      <xs:attribute name="version" type="xs:nonNegativeInteger">
+        <xs:annotation>
+          <xs:documentation>
+            Script version. The version has to be increased when new blocking actions are inserted.
+          </xs:documentation>
+        </xs:annotation>
+      </xs:attribute>
+      <xs:attribute name="comment" type="comment" />
+    </xs:complexType>
+    <xs:key name="attention">
+      <xs:selector xpath="attention" />
+      <xs:field xpath="@min" />
+    </xs:key>
+  </xs:element>
+
+</xs:schema>

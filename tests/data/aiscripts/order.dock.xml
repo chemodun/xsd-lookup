@@ -1,0 +1,1389 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+this script should be able to perform all the default checks and make sure a ship docks at the specified destination
+-->
+
+<aiscript name="order.dock" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="aiscripts.xsd" priority="11" version="26">
+  <order id="DockAt" name="{1041, 441}" description="{1041, 442}" category="internal" canplayercancel="true">
+    <params>
+      <param name="destination" type="object" default="@this.ship.assigneddock.container" text="{1041, 10027}" comment="Destination. Object">
+        <input_param name="class" value="if this.ship.isclass.[class.ship_s, class.ship_xs] then [class.station, class.ship_m, class.ship_l, class.ship_xl] else [class.station, class.ship_l, class.ship_xl]"/>
+      </param>
+      <param name="building" type="internal" default="false" text="{1041, 10016}" comment="Building. Whether the purpose of docking is to build, upgrade or repair"/>
+      <param name="trading" type="internal" default="false" text="{1041, 10131}" comment="Trading. Whether the purpose of docking is to trade" />
+      <param name="allowplayeronly" type="internal" default="false" text="'Allow PlayerOnly'" comment="Allow PlayerOnly. Whether a dock that is exclusive to the player may be used" />
+      <param name="ventureplatform" type="internal" default="null" text="'Venture Platform'" comment="Venture Platform. Use if the purpose of docking is to go on a venture" />
+      <param name="useentrypos" type="internal" default="true" text="{1041, 10139}" comment="Use entry position. Use dockmodule entry position"/>
+      <param name="dockfollowers" type="bool" default="this.ship.isunit" text="{1041, 10032}" advanced="true" comment="Dock subordinates. Order subordinates to dock at destination">
+        <patch value="this.ship.isunit" condition="this.ship.isunit and not $dockfollowers" sinceversion="8"/>
+      </param>
+      <param name="abouttofinish" type="internal" default="false" text="{1041, 10001}" comment="About to finish. calling order is about to finish and can be set to critical"/>
+      <!--<param name="timeout" type="time" default="0s" infinitevalue="0s" text="{1041, 10034}" comment="Duration, Time out">
+        <input_param name="min" value="0s" />
+        <input_param name="max" value="10h" />
+        <input_param name="step" value="30s" />
+      </param>-->
+      <param name="waittime" type="time" default="if this.ship.isclass.spacesuit then this.ship.oxygentimeremaining else 10min" text="{1041, 10061}" advanced="true" comment="Max wait time. maximum time we are willing to wait for a dock to be assigned">
+        <input_param name="startvalue" value="10min"/>
+        <input_param name="min" value="0s"/>
+        <input_param name="max" value="10h"/>
+        <input_param name="step" value="30s"/>
+      </param>
+      <param name="store" type="internal" default="false" comment="dock into internal storage if possible">
+        <patch value="false" sinceversion="19"/>
+      </param>
+      <param name="dockandwaitid" type="internal" default="null" comment="DockAndWait ID. ID of attached DockAndWaitOrder. If $thisship cannot dock, $dockandwaitid is cancelled to prevent the ship repeatedly trying to dock.."/>
+      <param name="callerid" type="internal" default="null" comment="Caller ID. Order ID of the order that called the attached DockAndWait order. Used for failure handling. This script expects that $callerid has the parameter $cannotdock and has handling for that parameter being set to true."/>
+      <param name="isdockfollower" type="internal" default="false" comment="order stems from commander docking with $dockfollowers set."/>
+      <param name="noattackresponse" type="internal" default="false" comment="Will not respond to attacks. Read in interrupt.attacked">
+        <patch value="false" sinceversion="18"/>
+      </param>
+      <param name="internalorder" type="internal" default="false" comment="Will be passed on to move.generic for blacklist enforcement."/>
+      <param name="noboost" type="internal" default="false" comment="passed into move.generic">
+        <patch value="false" sinceversion="20"/>
+      </param>
+      <param name="uselocalhighways" type="internal" default="not this.ship.iscapitalship" comment="passed into move.generic">
+        <patch value="not this.ship.iscapitalship" sinceversion="20"/>
+      </param>
+      <param name="untilplayerleaves" type="internal" default="false">
+        <patch value="false" sinceversion="23"/>
+      </param>
+      <param name="recallsubordinates" type="internal" default="true" comment="passed into move.generic">
+        <patch value="true" sinceversion="24"/>
+      </param>
+      <param name="spacesuittransfer" type="internal" default="this.ship.isplayerowned" comment="person in spacesuit transferred to object it docks with. NB: changing this behavior to apply to all factions will likely require some adjustment in MD scripts. Axiom, for example.">
+        <patch value="this.ship.isplayerowned" sinceversion="26"/>
+      </param>
+      <param name="debugchance" type="bool" default="0" advanced="true" text="{1041, 10086}" comment="Print debug output">
+        <input_param name="truevalue" value="100"/>
+      </param>
+    </params>
+    <requires>
+      <match shiptype="shiptype.lasertower" negate="true"/>
+    </requires>
+    <location object="$destination" condition="$destination.exists"/>
+  </order>
+  <interrupts>
+    <handler>
+      <conditions>
+        <check_any>
+          <event_object_destroyed object="$destination" check="false"/>
+          <event_object_abandoned object="$destination" check="false"/>
+          <check_all>
+            <!-- if $destination apparent ownership changes, regardless of whether or not cover is involved, docking should be cancelled if relations no longer allow docking.
+                  only exceptions to this rule are units and subordinates.
+                    units should dock in any case.
+                    if cover is involved, subordinate cover is handled immediately after commander cover is. -->
+            <event_object_changed_owner object="$destination" check="false"/>
+            <check_value value="$thisship.relationto.{$destination} lt 0"/>
+            <check_any>
+              <check_value value="not $thisship.isunit"/>
+              <check_all>
+                <check_value value="$destination.coverowner"/>
+                <check_value value="$thisship.commander != $destination"/>
+              </check_all>
+            </check_any>
+          </check_all>
+          <event_object_signalled object="$thisship" param="'dockat_abort'"/>
+        </check_any>
+      </conditions>
+      <actions>
+        <debug_text text="'destination: %s %s (%s) fired %s. aborting dock attempt.'.[$destination.idcode, $destination.knownname, $destination, event.name]" chance="$debugchance"/>
+        <abort_called_scripts resume="nodestination"/>
+      </actions>
+    </handler>
+    <handler>
+      <conditions>
+        <check_any>
+          <check_all>
+            <event_object_changed_zone object="$destination" check="false"/>
+            <check_any>
+              <check_value value="event.param.isclass.highway"/>
+              <check_value value="event.param2.isclass.highway"/>
+            </check_any>
+          </check_all>
+          <event_object_changed_sector object="$destination" check="false"/>
+          <check_all>
+            <event_object_dock_unassigned object="$thisship"/>
+            <check_value value="not $movingtozone?"/>
+          </check_all>
+          <event_object_signalled object="$thisship" param="'dockat_reset'"/>
+        </check_any>
+        <check_value value="not $thisship.dock"/>
+      </conditions>
+      <actions>
+        <do_if value="event.name == 'event_object_changed_sector'">
+          <debug_text text="'destination: %s %s (%s) moved to a different sector. aborting dock attempt and attempting to recover.'.[$destination.idcode, $destination.knownname, $destination]" chance="$debugchance"/>
+        </do_if>
+        <do_elseif value="event.name == 'event_object_changed_zone'">
+          <debug_text text="'destination: %s %s (%s) moved into, or out of, a highway. aborting dock attempt and attempting to recover.'.[$destination.idcode, $destination.knownname, $destination]" chance="$debugchance"/>
+        </do_elseif>
+        <do_else>
+          <debug_text text="'dock for %s %s (%s) at %s %s (%s) was unassigned. aborting dock attempt and attempting to recover.'.[$thisship.idcode, $thisship.knownname, $thisship, $destination.idcode, $destination.knownname, $destination]" chance="$debugchance"/>
+        </do_else>
+
+        <abort_called_scripts resume="movetozone"/>
+      </actions>
+    </handler>
+    <handler>
+      <conditions>
+        <event_object_target_invalid object="$thisship" check="false"/>
+      </conditions>
+      <actions>
+        <do_if value="not event.param2 and $destination.isoperational" comment="target invalid unreachable handled in code">
+          <debug_text text="'%s %s %s unable to dock at %s %s %s. target invalid.\n assigneddock: %s %s\n unreachable? %s'.[$thisship.idcode, $thisship.knownname, $thisship, $destination.idcode, $destination.knownname, $destination, @$thisship.assigneddock.knownname, @$thisship.assigneddock, event.param2]" chance="$debugchance"/>
+          <!--<assert value="false" text="'check debug output for %s %s in %s %s %s'.[this.knownname, this, $thisship.idcode, $thisship.knownname, $thisship]" break="always"/>-->
+        </do_if>
+
+        <!-- workaround to handle situation where we are too close to a station for octree navigation. we will be doing final approach with steering fcm. fcm reset to default with the script ending. -->
+        <do_if value="event.param2 and not $retry?">
+          <debug_text text="'%s %s %s was unable to dock at %s %s %s due to target being invalid and unreachable. retrying on steering once.'.[$thisship.idcode, $thisship.knownname, $thisship, $destination.idcode, $destination.knownname, $destination]" chance="$debugchance"/>
+          <set_value name="$retry"/>
+          <abort_called_scripts resume="movetodockingbay"/>
+        </do_if>
+        <do_else>
+          <debug_text text="'retry failed or target invalid but not unreachable. aborting.'" chance="$debugchance"/>
+          <abort_called_scripts resume="nodestination"/>
+        </do_else>
+      </actions>
+    </handler>
+    <handler>
+      <conditions>
+        <event_trade_cancelled tradeoffer="@$callerid.trade"/>
+        <check_value value="@$thisship.order.state != orderstate.critical"/>
+      </conditions>
+      <actions>
+        <debug_text text="'trade was cancelled. aborting dock order.'" chance="$debugchance"/>
+        <abort_called_scripts resume="nodestination"/>
+      </actions>
+    </handler>
+    <handler ref="SectorChangeHandler"/>
+    <handler ref="AttackHandler" />
+    <handler ref="MissileLockHandler" />
+    <handler ref="ScannedHandler" />
+    <handler ref="InspectedHandler"/>
+    <handler ref="TideHandler"/>
+    <!-- Patch used via handler  -->
+    <handler>
+      <conditions>
+        <event_object_signalled object="this" param="'patch_reset_dock'"/>
+      </conditions>
+      <actions>
+        <!-- On patch version 16 the label block should be restarted to -->
+        <stop_moving object="this.assignedcontrolled"/>
+        <set_to_default_flight_control_model object="this.assignedcontrolled"/>
+        <abort_called_scripts />
+      </actions>
+    </handler>
+  </interrupts>
+  <init>
+    <set_value name="$thisship" exact="this.assignedcontrolled"/>
+    <do_if value="this == player.computer" comment="this is sometimes Betty but Betty is not assigned to control this.ship">
+      <set_value name="$thisship" exact="this.ship"/>
+    </do_if>
+  </init>
+  <patch sinceversion="5">
+    <do_if value="@$thisship.isoperational">
+      <set_to_default_flight_control_model object="$thisship"/>
+    </do_if>
+  </patch>
+  <patch sinceversion="10">
+    <set_value name="$movementdest" exact="$destination"/>
+    <do_if value="@$dock">
+      <set_value name="$movementdest" exact="$dock"/>
+    </do_if>
+  </patch>
+  <patch sinceversion="11">
+    <set_value name="$endintargetzone" exact="not $destination.isclass.ship or $destination.zone.isclass.highway"/>
+  </patch>
+  <patch sinceversion="12">
+    <set_value name="$isdockfollower" exact="false"/>
+    <do_if value="$dockfollowers and @$thisship.commander.isclass.ship and ((($thisship.commander.order.id == 'DockAndWait' or $thisship.commander.order.id == 'DockAt') and $thisship.commander.order.$destination == $destination) or $thisship.commander.hascontext.{$destination})">
+      <set_value name="$isdockfollower" exact="true"/>
+    </do_if>
+  </patch>
+  <patch sinceversion="13">
+    <do_if value="this.assignedcontrolled.commander and this.assignedcontrolled.subordinategroupdockoverride and (@this.assignedcontrolled.defaultorder.id == 'DockAndWait') and (this.assignedcontrolled.defaultorder.$destination == this.assignedcontrolled.commander)">
+      <debug_text text="'%s %s %s subordinate of %s %s %s. resetting default order to escort.'.[@this.assignedcontrolled.idcode, @this.assignedcontrolled.knownname, this.assignedcontrolled, @this.assignedcontrolled.commander.idcode, @this.assignedcontrolled.commander.knownname, this.assignedcontrolled.commander]" filter="savegame"/>
+      <create_order object="this.assignedcontrolled" id="'Escort'" default="true">
+        <param name="target" value="this.assignedcontrolled.commander"/>
+      </create_order>
+      <do_if value="this.assignedcontrolled.order.id == 'DockAt' and this.assignedcontrolled.order.isparameditable.callerid">
+        <edit_order_param order="this.assignedcontrolled.order" param="'callerid'" value="this.assignedcontrolled.defaultorder"/>
+      </do_if>
+    </do_if>
+  </patch>
+  <patch sinceversion="15">
+    <set_value name="$internalorder" exact="false"/>
+  </patch>
+  <patch sinceversion="16">
+    <debug_text text="'PATCH: setting %s %s %s %s to default flight control model and restarting docking label-block.'.[this.assignedcontrolled.class, this.assignedcontrolled.idcode,this.assignedcontrolled.knownname, this.assignedcontrolled]" filter="savegame"/>
+    <!-- need to patch the movement this way because:
+      it isn't possible to change the flight control model on a ship while it is on a move_to where the fcm is forced to steering,
+      and it isn't possible to use resume and abort_called_scripts in the patch node. -->
+    <do_if value="not $thisship.iscapitalship and @$dockmodule and not $abort? and $thisship.assigneddock and @$dockmodule.haswaypointpath.{$thisship.assigneddock.grouptag}.[tag.dockpath, tag.start]">
+      <signal_objects object="this" param="'patch_reset_dock'"/>
+    </do_if>
+  </patch>
+  <patch sinceversion="17">
+    <do_if value="($thisship.zone != $destination.zone)">
+      <remove_docking_request ship="$thisship" container="$destination"/>
+      <debug_text text="'%s %s %s temporarily removing request to dock with\n%s %s %s.\ndistance to destination: %sm'.[@$thisship.idcode, @$thisship.knownname, @$thisship, @$destination.idcode, @$destination.knownname, $destination, $thisship.distanceto.{$destination}]"/>
+    </do_if>
+  </patch>
+  <patch sinceversion="19">
+    <set_value name="$store" exact="false"/>
+  </patch>
+  <patch sinceversion="20">
+    <set_value name="$noboost" exact="false"/>
+    <set_value name="$uselocalhighways" exact="not this.assignedcontrolled.iscapitalship"/>
+  </patch>
+  <patch sinceversion="21">
+    <set_value name="$time_startdocking" exact="player.age"/>
+    <do_if value="not @$thisship.order.exists or $thisship.order.state != orderstate.critical">
+      <signal_objects object="$thisship" param="'dockat_reset'"/>
+    </do_if>
+  </patch>
+  <patch sinceversion="23">
+    <set_value name="$untilplayerleaves" exact="false"/>
+  </patch>
+  <patch sinceversion="24">
+    <set_value name="$recallsubordinates" exact="true"/>
+  </patch>
+  <patch sinceversion="25">
+    <do_if value="$thisship.isclass.spacesuit and (not @$thisship.order.exists or $thisship.order.state != orderstate.critical)">
+      <signal_objects object="$thisship" param="'dockat_reset'"/>
+    </do_if>
+  </patch>
+  <patch sinceversion="26">
+    <set_value name="$spacesuittransfer" exact="this.assignedcontrolled.isplayerowned"/>
+  </patch>
+  <attention min="unknown">
+    <actions>
+      <!-- this.$subordinateorders used and cleaned up in order.dock.wait unless order.dock is aborted -->
+      <do_if value="not $subordinateorders?">
+        <create_list name="$subordinateorders" comment="orders that will be created on the subordinates"/>
+      </do_if>
+
+      <do_if value="not $destination or not $destination.isoperational">
+        <resume label="nodestination" />
+      </do_if>
+
+      <do_if value="$destination == $thisship">
+        <resume label="nodestination"/>
+      </do_if>
+
+      <do_if value="$thisship.towedobject">
+        <do_if value="$thisship.isplayerowned">
+          <set_value name="$failuretext" exact="{1045,135}" comment="Unable to dock while towing."/>
+          <resume label="nodestination"/>
+        </do_if>
+        <do_else>
+          <stop_towing_object ship="$thisship"/>
+        </do_else>
+      </do_if>
+
+      <do_if value="$untilplayerleaves and not player.entity.hascontext.{$thisship}">
+        <debug_text text="'We were docking for the player but player is no longer aboard. Aborting dock order.'" chance="$debugchance"/>
+        <resume label="nodestination"/>
+      </do_if>
+
+      <do_if value="$destination.zone.isclass.highway">
+        <debug_text text="'docking. destination is in a highway.'" chance="$debugchance"/>
+      </do_if>
+
+      <!-- check if we are currently docked / parked -->
+      <do_if value="$destination">
+        <do_if value="($thisship.dock and (not $building or $thisship.dock.isbuildingallowed) and (not $trading or $thisship.dock.istradingallowed) and (@$thisship.dock.ventureplatform == $ventureplatform)) or ($thisship.parkedat and ($thisship.parkedat != $destination) and not @$thisship.parkedat.hascontext.{$destination})">
+          <!-- NB: some ships such as mining drones do not use orders and must dock to be recovered. if they are currently docked and they get to this point, finish undocking and dock again. -->
+          <do_if value="($thisship.container == $destination) and $thisship.order">
+            <do_if value="$dockfollowers and not $subordinateorders.count">
+              <set_value name="$subordinates" exact="$thisship.subordinates" />
+              <set_value name="$locsubordinateorders" exact="[]"/>
+              <do_all exact="$subordinates.count" counter="$i">
+                <do_if value="$subordinates.{$i}.isunit">
+                  <do_all exact="$subordinates.{$i}.orders.count" counter="$j" reverse="true">
+                    <cancel_order order="$subordinates.{$i}.orders.{$j}"/>
+                  </do_all>
+                  <do_if value="$thisship.commander">
+                    <!-- Change commander of subordinates, to not let them promote when this ship docks -->
+                    <set_object_commander object="$subordinates.{$i}" commander="$thisship.commander" />
+                  </do_if>
+                </do_if>
+                <do_elseif value="not $subordinates.{$i}.iscapitalship and @$subordinates.{$i}.dock.container != $thisship">
+                  <do_if value="$internalorder and (not $callerid or not $callerid.exists or not $callerid.$subordinateorders?)">
+                    <!-- this happens when the DockAndWait order of a ship is docked while it is already at DockAt. will result in the ship immediately undocking. safe to simply not order subordinates to dock in this case. -->
+                    <debug_text text="'order.dock called with dockfollowers but no callerid. we have no place to store the subordinateorders. NOT ordering subordinates to dock.'" chance="$debugchance"/>
+                  </do_if>
+                  <do_else>
+                    <do_all exact="$subordinates.{$i}.orders.count + 1" counter="$j">
+                      <do_if value="$j gt $subordinates.{$i}.orders.count">
+                        <set_value name="$immediatedockorder"/>
+                      </do_if>
+                      <do_elseif value="$subordinates.{$i}.orders.{$j}.id == 'Resupply' or $subordinates.{$i}.orders.{$j}.id == 'Equip' or $subordinates.{$i}.orders.{$j}.id == 'Repair' or $subordinates.{$i}.orders.{$j}.id == 'DockAt' or $subordinates.{$i}.orders.{$j}.id == 'DockAndWait'">
+                        <set_value name="$immediatedockorder" exact="false"/>
+                        <break/>
+                      </do_elseif>
+                    </do_all>
+                    <create_order object="$subordinates.{$i}" name="$order_sub" id="'DockAndWait'" immediate="$immediatedockorder">
+                      <param name="destination" value="$destination"/>
+                      <param name="dockfollowers" value="$dockfollowers"/>
+                      <param name="isdockfollower" value="true"/>
+                      <param name="callerid" value="if $dockandwaitid then $dockandwaitid else $callerid"/>
+                      <param name="internalorder" value="true"/>
+                      <param name="debugchance" value="$debugchance"/>
+                    </create_order>
+                    <debug_text text="player.age + ': 1 %s %s %s ordering %s %s %s to dock. sub order: %s, this order: %s, caller: %s'.[@this.assignedcontrolled.idcode, @this.assignedcontrolled.knownname, this.assignedcontrolled, @$subordinates.{$i}.idcode, @$subordinates.{$i}.knownname, $subordinates.{$i}, $order_sub, $thisship.order, @$callerid.id]" chance="0"/>
+                    <append_to_list name="$locsubordinateorders" exact="$order_sub"/>
+                    <debug_text text="'adding order: %s %s for %s %s to subordinateorders. num recorded orders: %s'.[$order_sub.id, $order_sub, $subordinates.{$i}.knownname, $subordinates.{$i}, $locsubordinateorders.count]" chance="$debugchance"/>
+                    <remove_value name="$order_sub"/>
+                    <remove_value name="$immediatedockorder"/>
+                  </do_else>
+                </do_elseif>
+              </do_all>
+              <do_if value="$locsubordinateorders?">
+                <set_value name="$subordinateorders" exact="$locsubordinateorders"/>
+                <!-- NB: $subordinateorders has to be passed into both $callerid and $dockandwaitid. $callerid to handle undocking, and in $dockandwaitid in case this is destroyed after this order but before callerid runs. -->
+                <do_if value="@$callerid.exists and $callerid.$subordinateorders? and $locsubordinateorders.count">
+                  <debug_text text="'passing %s subordinate orders to order %s'.[$locsubordinateorders.count, $callerid.id]" chance="$debugchance"/>
+                  <edit_order_param order="$callerid" param="'subordinateorders'" value="$locsubordinateorders"/>
+                </do_if>
+                <do_if value="@$dockandwaitid.exists and $dockandwaitid.$subordinateorders? and $locsubordinateorders.count">
+                  <debug_text text="'passing %s subordinate orders to order %s'.[$locsubordinateorders.count, $dockandwaitid.id]" chance="$debugchance"/>
+                  <edit_order_param order="$dockandwaitid" param="'subordinateorders'" value="$locsubordinateorders"/>
+                </do_if>
+                <remove_value name="$locsubordinateorders"/>
+              </do_if>
+              <remove_value name="$subordinates" />
+            </do_if>
+            <debug_text text="'we are already docked at our destination!'" chance="$debugchance" />
+            <resume label="finish"/>
+          </do_if>
+          <run_script name="'move.undock'">
+            <param name="debugchance" value="$debugchance"/>
+          </run_script>
+        </do_if>
+      </do_if>
+
+      <label name="start"/>
+
+      <do_if value="not $destination or not $destination.isoperational">
+        <resume label="nodestination"/>
+      </do_if>
+
+      <!-- see if there is a possible dock location -->
+      <find_dockingbay object="$destination" name="$dock">
+        <match_dock size="$thisship.docksize" trading="$trading" building="$building" allowplayeronly="$allowplayeronly" ventureplatform="$ventureplatform" ventureronly="$ventureplatform.isoperational" storage="false"/>
+        <match_relation_to object="$thisship" comparison="not" relation="enemy"/>
+      </find_dockingbay>
+      <do_if value="$dock == null">
+        <do_if value="((@$destination.type == shiptype.resupplier) or (@$destination.type == shiptype.carrier)) and not $thisship.hasrelation.enemy.{$destination} and $thisship.iscapitalship">
+          <do_if value="not $destination.zone.isclass.highway">
+            <set_value name="$park"/>
+          </do_if>
+          <do_else>
+            <debug_text text="'destination %s %s %s is in a highway. waiting to try again.'" chance="$debugchance"/>
+            <!-- if $destination is in a highway, wait for it to leave the highway before telling it to stop. -->
+            <wait sinceversion="2" min="17s" max="31s">
+              <interrupt>
+                <conditions>
+                  <check_any>
+                    <check_all>
+                      <event_object_changed_zone object="$destination"/>
+                      <check_value value="not event.param.isclass.highway"/>
+                    </check_all>
+                    <event_object_destroyed object="$destination"/>
+                  </check_any>
+                </conditions>
+              </interrupt>
+            </wait>
+            <resume label="start"/>
+          </do_else>
+        </do_if>
+        <do_else>
+          <debug_text text="'could not find valid dock for \'%1\' at destination \'%2\'(%3) - %4!'.[$thisship.macro.id, $destination.macro.id, $destination, this.cluster.knownname]" chance="$debugchance" />
+          <resume label="nodestination" />
+        </do_else>
+      </do_if>
+      <do_else>
+        <debug_text text="'found docking bay: %1 on %4. storage? %2 external? %3'.[$dock.macro.id, $dock.isstorage, $dock.external, $destination.macro.id]" chance="$debugchance"/>
+      </do_else>
+
+      <do_if value="$thisship.assigneddock.exists and (not (if $thisship.isunit then $thisship.assigneddock.isunitdockingallowed else $thisship.assigneddock.isdockingallowed) or ($thisship.assigneddock.container != $destination) or ($building and not $thisship.assigneddock.isbuildingallowed) or ($trading and not $thisship.assigneddock.istradingallowed) or (@$thisship.assigneddock.ventureplatform != $ventureplatform))">
+        <debug_text text="'assigned dock does not meet our requirements'" chance="$debugchance"/>
+        <do_if value="$thisship.assigneddock.container != $destination">
+          <debug_text text="'the dock assigned to %s %s (%s) is not connected to our destination %s %s (%s). it is at %s %s (%s).'.[$thisship.idcode, $thisship.knownname, $thisship, $destination.idcode, $destination.knownname, $destination, $thisship.assigneddock.container.idcode, $thisship.assigneddock.container.knownname, $thisship.assigneddock.container]" chance="$debugchance"/>
+        </do_if>
+        <!--<assert value="$thisship.assigneddock.container == $destination" text="'the dock assigned to %s %s (%s) is not connected to our destination %s %s (%s). it is at %s %s (%s).'.[$thisship.idcode, $thisship.knownname, $thisship, $destination.idcode, $destination.knownname, $destination, $thisship.assigneddock.container.idcode, $thisship.assigneddock.container, $thisship.assigneddock.container.knownname]" break="always"/>-->
+        <!-- this clears the dock assignment, which might have been left over from undocking (the dock is automatically unassigned at a minimum distance which might not have been reached yet) -->
+        <debug_text text="'clear docking request for dock %s at %s(%s)'.[$thisship.assigneddock, $thisship.assigneddock.container.knownname, $thisship.assigneddock.container]" chance="$debugchance" />
+        <remove_docking_request ship="$thisship" container="$thisship.assigneddock.container" immediate="true" />
+      </do_if>
+
+      <label name="movetozone" />
+
+      <do_if value="not $destination.isoperational">
+        <debug_text text="'destination is not operational. aborting.'" chance="$debugchance"/>
+        <resume label="nodestination"/>
+      </do_if>
+
+      <!-- After the checks, set command dock -->
+      <set_command command="command.dockat" param="$destination" />
+
+      <!-- leave formation (if there is any) as that would block our movement -->
+      <do_if value="not $dockfollowers">
+        <!-- if only we should dock, leave current formation -->
+        <leave_formation object="$thisship" />
+      </do_if>
+      <do_else>
+        <do_all exact="this.assignedcontrolled.subordinates.count" counter="$i">
+          <set_value name="$locsubordinate" exact="this.assignedcontrolled.subordinates.{$i}"/>
+          <do_if value="$locsubordinate.isoperational and not $locsubordinate.dock and $locsubordinate.isformationwingman and ($locsubordinate.formationleader == $thisship)">
+            <!-- if we must tell followers to dock, create a line formation to go all together  -->
+            <leave_formation object="$locsubordinate"/>
+            <create_formation leader="$thisship" follower="$locsubordinate" formation="formationshape.lineastern" param="$thisship.size * 2"/>
+            <break/>
+          </do_if>
+        </do_all>
+        <remove_value name="$locsubordinate"/>
+      </do_else>
+
+      <!-- if necessary order the ship to move to the correct zone -->
+      <set_value name="$movementdest" exact="$destination"/>
+      <do_if value="@$dock.isoperational and not $destination.isclass.ship">
+        <set_value name="$movementdest" exact="$dock"/>
+      </do_if>
+      <set_value name="$canmovecloser"/>
+      <debug_text text="'check if already in correct zone. this zone: %s %s, destination zone: %s %s'.[this.zone.knownname, this.zone, $destination.zone.knownname, $destination.zone]" chance="$debugchance"/>
+      <do_if value="$alwaysmove? or (this.sector != $destination.sector) or ((($destination.isclass.ship and not $destination.zone.isclass.highway) or this.zone != $movementdest.zone) and $thisship.bboxdistanceto.{$movementdest} gt 10km)">
+        <debug_text text="'move to destination \n this zone: %1\n this sector: %2\n destination sector: %3\n distance to destination: %4'.[this.zone, this.sector, $destination.sector, $thisship.bboxdistanceto.{$destination}]" chance="$debugchance"/>
+        <include_interrupt_actions ref="NPCUseCase_NavOrder"/>
+
+        <!-- if we're far enough away that we have to do movetozone, remove any existing docking requests to clear the dock for other ships until we get closer. -->
+        <remove_docking_request ship="$thisship" container="$destination"/>
+        <set_value name="$movingtozone"/>
+
+        <set_value name="$endintargetzone" exact="not $destination.isclass.ship or $destination.zone.isclass.highway"/>
+        <!-- NB: if destination is in a highway, move.generic, in this configuration, will finish when it gets to the same highway. -->
+        <run_script name="'move.generic'" result="$movesuccess">
+          <param name="destination" value="$movementdest"/>
+          <param name="endintargetzone" value="$endintargetzone"/>
+          <param name="strictblacklist" value="$internalorder"/>
+          <param name="noboost" value="$noboost"/>
+          <param name="uselocalhighways" value="$uselocalhighways"/>
+          <param name="recallsubordinates" value="$recallsubordinates"/>
+          <param name="debugchance" value="$debugchance"/>
+        </run_script>
+
+        <do_if value="$endintargetzone">
+          <remove_value name="$canmovecloser"/>
+        </do_if>
+        <remove_value name="$alwaysmove"/>
+        <remove_value name="$endintargetzone"/>
+        <remove_value name="$movingtozone"/>
+
+        <wait min="300ms" max="750ms"/>
+        <do_if value="not $movesuccess">
+          <do_if value="$internalorder">
+            <set_value name="$loctarget" exact="$thisship"/>
+            <include_interrupt_actions ref="GetBlacklistgroup"/>
+            <remove_value name="$loctarget"/>
+          </do_if>
+          <!-- better would be $thisship.gatedistance.{$destination}.{$blacklistgroup}.{$thisship} ge 0 or (not $internalorder and $thisship.gatedistance.{$destination} ge 0) but evaluating $internalorder is much cheaper than evaluating gatedistance. -->
+          <do_if value="($internalorder and $thisship.gatedistance.{$destination}.{$blacklistgroup}.{$thisship} ge 0) or (not $internalorder and $thisship.gatedistance.{$destination} ge 0)">
+            <resume label="movetozone"/>
+          </do_if>
+          <do_else>
+            <set_value name="$failuretext" exact="{1045, 101}" comment="Unable to reach destination."/>
+            <debug_text text="'no path to destination. aborting.'" filter="error"/>
+            <resume label="nodestination"/>
+          </do_else>
+        </do_if>
+        <do_elseif value="(this.sector != $destination.sector) or ((($destination.isclass.ship and not $destination.zone.isclass.highway) or (this.zone != $movementdest.zone and not $movementdest.zone.adjacentzones.indexof.{this.zone})) and $thisship.bboxdistanceto.{$movementdest} gt [10km, $destination.size/2].max)">
+          <debug_text text="'%s %s %s did not arrive at destination %s %s %s after return from move.generic. looping back.\n cond 1: %s, this sector: %s %s, destination sector: %s %s\n cond 2: %s, this zone: %s %s, destination zone: %s %s, distance: %sm\n cond 3: %s, in highway: %s, destination in highway: %s'.[this.assignedcontrolled.idcode, this.assignedcontrolled.knownname, this.assignedcontrolled, $destination.idcode, $destination.knownname, $destination, this.sector != $destination.sector, this.sector.knownname, this.sector, $destination.sector.knownname, $destination.sector, (this.zone != $destination.zone) and $thisship.bboxdistanceto.{$destination} gt 10km, this.zone.knownname, this.zone, $destination.zone.knownname, $destination.zone, $thisship.bboxdistanceto.{$destination}, this.zone.isclass.highway != $destination.zone.isclass.highway, this.zone.isclass.highway, $destination.zone.isclass.highway]" chance="$debugchance"/>
+          <!--<assert value="false" text="'check debug output for ' + this" break="always"/>-->
+          <resume label="movetozone"/>
+        </do_elseif>
+      </do_if>
+      <!--<remove_value name="$movementdest"/>-->
+
+      <!-- tell subordinates to dock as well -->
+      <break_formation object="$thisship" />
+
+      <label name="waitfordockslot" />
+
+      <do_if value="not $destination.isoperational">
+        <resume label="nodestination" />
+      </do_if>
+
+      <do_if value="$park?">
+        <do_if value="not $destination.zone.isclass.highway and not $destination.parkedat and not $destination.assigneddock and (@$destination.order.state != orderstate.critical or (@$destination.order.id == 'WaitForSignal' and $destination.order.$releasesignal == ['resupply_proceed'] and $destination.order.$signaller == this.assignedcontrolled))">
+          <do_if value="@$destination.order.id != 'WaitForSignal' or $destination.order.$releasesignal != ['resupply_proceed'] or $destination.order.$signaller != this.assignedcontrolled">
+            <!-- moved from label start. wait until the last minute since destination will have to stop and wait for us. -->
+            <create_order id="'WaitForSignal'" object="$destination" immediate="true">
+              <param name="releasesignal" value="['resupply_proceed']"/>
+              <param name="signaller" value="this.assignedcontrolled"/>
+              <param name="allowparked" value="true"/>
+              <param name="setcritical" value="true"/>
+            </create_order>
+          </do_if>
+          <run_script name="'move.park'" result="$parksuccess" sinceversion="2">
+            <param name="destination" value="$destination"/>
+            <param name="sendreleasesignal" value="['resupply_proceed']"/>
+            <param name="debugchance" value="$debugchance"/>
+          </run_script>
+
+          <do_if value="$parksuccess">
+            <debug_text text="player.age + ' now parked at ' + $destination.knownname" chance="$debugchance"/>
+            <resume label="finish"/>
+          </do_if>
+          <do_else>
+            <resume label="nodestination"/>
+          </do_else>
+        </do_if>
+        <do_else>
+          <debug_text text="'destination %s %s %s is busy and we have to park. waiting to try again.\nin a highway: %s\nparkedat: %s\ncritical order: %s\ndocking at: %s'.[@$destination.idcode, @$destination.knownname, $destination, $destination.zone.isclass.highway, $destination.parkedat, (@$destination.order.state != orderstate.critical), $destination.assigneddock]" chance="$debugchance"/>
+          <wait min="19s" max="29s" sinceversion="22"/>
+          <resume label="movetozone"/>
+        </do_else>
+      </do_if>
+
+      <!-- waiting to dock -->
+      <set_command_action commandaction="commandaction.waitingtodock" param="player.occupiedship" />
+
+      <do_if value="$destination.zone.isclass.highway">
+        <!-- in this case, simply allow the highway to sweep us along until either we or destination leaves the highway. -->
+        <debug_text text="'destination is in a highway and we were about to approach to dock. waiting until we or destination leaves the highway.'" chance="$debugchance"/>
+        <wait comment="$destination leaving the highway should be caught by the global handler.">
+          <interrupt>
+            <conditions>
+              <event_object_changed_zone object="$thisship"/>
+              <check_value value="not event.param.isclass.highway"/>
+            </conditions>
+          </interrupt>
+        </wait>
+        <debug_text text="'wait done. left the highway.'" chance="$debugchance"/>
+        <resume label="movetozone"/>
+      </do_if>
+
+      <set_value name="$time_startdocking" exact="player.age"/>
+
+      <do_if value="(($thisship.distanceto.{$destination} + $thisship.size / 2.0 + $destination.size / 2.0) gt 10km and ($thisship != player.occupiedship))">
+        <debug_text text="'moving to approach position.'" chance="$debugchance"/>
+
+        <!-- we are not necessarily going to dock at $dock, but it would be a useful gathering point for ships about to dock. -->
+        <do_if value="not $pos_approach?">
+          <do_if value="@$dock.isoperational">
+            <!-- NB: approach pos is relative to $destination.
+                  changed to use $dock's position relative to $destination. actual movement will be to a safepos close to this position. -->
+            <create_position name="$pos_approach" space="$destination" object="$dock"/>
+
+            <debug_text text="'the approach position to the closest valid %1 dock of %2 is at %3'.[$thisship.docksize, $destination.knownname, $pos_approach]" chance="$debugchance"/>
+
+            <set_value name="$list_poscomponents" exact="[]"/>
+            <append_to_list name="$list_poscomponents" exact="$pos_approach.x"/>
+            <append_to_list name="$list_poscomponents" exact="$pos_approach.y"/>
+            <append_to_list name="$list_poscomponents" exact="$pos_approach.z"/>
+            <do_all exact="$list_poscomponents.count" counter="$i">
+              <do_if value="$list_poscomponents.{$i} lt 0">
+                <set_value name="$list_poscomponents.{$i}" exact="-$list_poscomponents.{$i}"/>
+              </do_if>
+            </do_all>
+            <debug_text text="$list_poscomponents" chance="0"/>
+
+            <!-- if docking at a stationary object, would be good to avoid needless movement on the y-axis, especially if the object docking is a capital ship. -->
+            <!--<do_if value="$destination.isclass.ship and $list_poscomponents.{2} gt $list_poscomponents.{1}">-->
+            <do_if value="$destination.isclass.ship or ($list_poscomponents.{2} gt $list_poscomponents.{1} and $list_poscomponents.{2} gt $list_poscomponents.{3})">
+              <do_if value="$pos_approach.y ge 0">
+                <set_value name="$quadrant_dock" exact="quadrant.up"/>
+              </do_if>
+              <do_else>
+                <set_value name="$quadrant_dock" exact="quadrant.down"/>
+              </do_else>
+            </do_if>
+            <!-- if docking at a ship, would be good to avoid the front so as to avoid needless collision avoidance, and would be good to avoid the rear of the ship since the engines burn that way. -->
+            <do_elseif value="$list_poscomponents.{3} gt $list_poscomponents.{1} and $list_poscomponents.{3} gt $list_poscomponents.{2}">
+              <!--<do_elseif value="not $destination.isclass.ship and $list_poscomponents.{3} gt $list_poscomponents.{1} and $list_poscomponents.{3} gt $list_poscomponents.{2}">-->
+              <do_if value="not $destination.isclass.ship and $pos_approach.z gt 0">
+                <set_value name="$quadrant_dock" exact="quadrant.front"/>
+              </do_if>
+              <do_else>
+                <set_value name="$quadrant_dock" exact="quadrant.back"/>
+              </do_else>
+            </do_elseif>
+            <!-- positions on the x-axis relative to $destination should be safe in any case. -->
+            <do_else>
+              <do_if value="$pos_approach.x gt 0">
+                <set_value name="$quadrant_dock" exact="quadrant.right"/>
+              </do_if>
+              <do_else>
+                <set_value name="$quadrant_dock" exact="quadrant.left"/>
+              </do_else>
+            </do_else>
+            <remove_value name="$list_poscomponents"/>
+            <debug_text text="$quadrant_dock" chance="$debugchance"/>
+          </do_if>
+          <do_else>
+            <debug_text text="'dock is no longer operational. checking again. this should not spam.'" chance="$debugchance"/>
+            <find_dockingbay object="$destination" name="$dock">
+              <match_dock size="$thisship.docksize" storage="false"/>
+              <match_relation_to object="$thisship" comparison="not" relation="enemy"/>
+            </find_dockingbay>
+            <do_if value="not $dock">
+              <debug_text text="'could not find valid dock for \'%1\' at destination \'%2\'(%3) - %4!'.[$thisship.macro.id, $destination.macro.id, $destination, this.cluster.knownname]" chance="$debugchance"/>
+              <resume label="nodestination"/>
+            </do_if>
+            <do_else>
+              <do_if value="@$dock.isoperational and not $destination.isclass.ship">
+                <!-- update $movementdest in case $dock as changed -->
+                <set_value name="$movementdest" exact="$dock"/>
+              </do_if>
+              <resume label="waitfordockslot"/>
+            </do_else>
+          </do_else>
+        </do_if>
+
+        <!--<get_safe_pos result="$safepos" zone="$destination.zone" object="$destination" radius="$thisship.size * 2" directionobject="$destination" direction="$quadrant_dock" ignored="$thisship"/>-->
+        <get_safe_pos result="$safepos" zone="$destination.zone" value="$pos_approach" object="$destination" radius="$thisship.size * 2" directionobject="$destination" direction="$quadrant_dock" max="if not $thisship.iscapitalship then ($thisship.size * 2) else 0" ignored="$thisship"/>
+        <create_orientation name="$orientation" orientation="look_at" refobject="$destination">
+          <position value="$safepos"/>
+        </create_orientation>
+        <!-- translate safepos into the coordinate space of $destination. -->
+        <create_position name="$safepos" space="$destination" value="$safepos" object="$destination.zone"/>
+
+        <debug_text text="'\ndestination pos: %1\napproach pos: %2\nparking pos: %3\ndestination zone: %4, my zone: %5'.[$destination.position, $pos_approach, $safepos, $destination.zone, this.zone]" chance="$debugchance"/>
+
+        <!-- move closer to the destination
+                to do: possible problem if $destination goes through a jumpgate or moves to a highway. -->
+        <do_if value="$debugchance gt 0">
+          <do_if value="@$thisship.sector">
+            <create_position name="$debug_sector_pos" object="$thisship" space="$thisship.sector"/>
+            <debug_text text="'location info for object=%2 at %1\n zone: %3, position: %4\n sector: %5, position: %6'.[player.age, $thisship, this.zone, $thisship.position, this.sector, $debug_sector_pos]"/>
+          </do_if>
+          <debug_text text="'move_to(403) destination=%1 position=%2 distance=%3'.[$destination, $safepos, $thisship.distanceto.[$destination, $safepos]]"/>
+        </do_if>
+        <do_if value="($thisship.distanceto.{$destination} gt $destination.distanceto.[$destination, $safepos])">
+          <move_to object="$thisship" destination="$destination" finishonapproach="true" flightbehaviour="flightbehaviour.generic" forceposition="false" forcerotation="false" travel="@$thisship.travel.active or (($thisship.distanceto.[$destination, $safepos] / [$thisship.maxspeed, 1m].max)s gt 60s)">
+            <position value="$safepos"/>
+            <rotation value="$orientation"/>
+            <!--<interrupt_after_time time="0s"/>-->
+          </move_to>
+          <!-- only useful if interrupt_after_time time="0s" above is removed and you actually are at parking position. -->
+          <debug_text text="'at parking position. distance to destination: %1, distance to approachpos: %2.'.[$thisship.distanceto.{$destination}, $thisship.distanceto.[$destination, $pos_approach]]" chance="$debugchance"/>
+        </do_if>
+        <do_else>
+          <debug_text text="'skipping parking position. my distance to destination: %s. destination distance to safepos: %s'.[$thisship.distanceto.{$destination}, $destination.distanceto.[$destination, $safepos]]" chance="$debugchance"/>
+        </do_else>
+        <remove_value name="$safepos"/>
+      </do_if>
+
+      <label name="requestdock"/>
+
+      <!-- ok, everything checks out, now start the docking procedure and request approach path -->
+      <!-- if not trading, dock.istradingallowed is fine. same with not building. -->
+      <do_if value="not $thisship.assigneddock.exists or ($thisship.assigneddock.container != $destination) or not (if $thisship.isunit then $thisship.assigneddock.isunitdockingallowed else $thisship.assigneddock.isdockingallowed) or ($building and not $thisship.assigneddock.isbuildingallowed) or ($trading and not $thisship.assigneddock.istradingallowed) or (@$thisship.assigneddock.ventureplatform != $ventureplatform)">
+        <do_if value="not $thisship.isunit and (($isdockfollower and $destination != $thisship.commander) or $thisship.subordinates.count) and $thisship.allcommanders.indexof.{$destination} and $destination.defencenpc">
+          <debug_text text="'%s %s %s docking at commander %s %s %s. someone already docking: %s'.[@$thisship.idcode, @$thisship.knownname, $thisship, @$destination.idcode, @$destination.knownname, $destination, @$destination.defencenpc.$blockingdockapproach]" chance="$debugchance"/>
+          <do_if value="@$destination.defencenpc.$blockingdockapproach.isoperational and ($thisship.allcommanders.indexof.{$destination.defencenpc.$blockingdockapproach} or ($destination.defencenpc.$blockingdockapproach == $thisship))">
+            <debug_text text="'dock approach is blocked by our commander or us. proceeding to request dock.'" chance="$debugchance"/>
+          </do_if>
+          <do_elseif value="not @$destination.defencenpc.$blockingdockapproach.isoperational and ($thisship.subordinates.count or ($thisship.commander.dock and $thisship.commander.hascontext.{$destination}))">
+            <debug_text text="'dock approach is not blocked. blocking approach and requesting dock.'" chance="$debugchance"/>
+            <do_if value="$thisship.subordinates.count">
+              <!-- single ships docking should not block the dock approach. -->
+              <set_value name="$destination.defencenpc.$blockingdockapproach" exact="$thisship"/>
+            </do_if>
+          </do_elseif>
+          <do_else>
+            <debug_text text="'approach to dock is blocked by %s %s %s. waiting to request again.'.[@$destination.defencenpc.$blockingdockapproach.idcode, @$destination.defencenpc.$blockingdockapproach.knownname, @$destination.defencenpc.$blockingdockapproach]" chance="$debugchance"/>
+            <wait min="5s" max="10s" sinceversion="6"/>
+            <resume label="requestdock"/>
+          </do_else>
+        </do_if>
+        <do_else>
+          <debug_text text="'no need to wait. proceeding to request dock.'" chance="$debugchance"/>
+        </do_else>
+
+        <debug_text text="'request docking'" chance="$debugchance" />
+        <request_docking ship="$thisship" container="$destination" highpriority="$thisship.isunit" requirebuilding="$building" requiretrading="$trading" allowplayeronly="$allowplayeronly" ventureronly="$ventureplatform.isoperational" ventureplatform="$ventureplatform" queuedresult="$queuedresult" grantedresult="$grantedresult" />
+        <do_if value="$queuedresult">
+          <!-- NB: if $canmovecloser, we did not do initial approach or $destination is a ship that was not in a highway. -->
+          <do_if value="$canmovecloser? and $thisship.bboxdistanceto.{$destination} gt 1km">
+            <debug_text text="'docking request was queued and we can move closer. moving closer to target. distance to destination: %sm, distance to dock: %sm'.[$thisship.bboxdistanceto.{$destination}, $thisship.distanceto.{$movementdest} - $thisship.size / 2]" chance="$debugchance"/>
+            <set_value name="$alwaysmove"/>
+            <resume label="movetozone"/>
+          </do_if>
+          <debug_text text="'waiting for free dock'" chance="$debugchance" />
+
+          <do_if value="not $thisship.assigneddock.exists">
+            <do_if value="(@$thisship.defaultorder.id == 'Escort') and @$thisship.allcommanders.indexof.{$destination}">
+              <set_value name="$dockingatcommander"/>
+              <find_dockingbay name="$locfreedocks" object="$destination" multiple="true">
+                <match_dock size="$thisship.docksize" free="true"/>
+              </find_dockingbay>
+              <find_dockingbay name="$locshipstorage" object="$destination" multiple="true">
+                <match_dock size="$thisship.docksize" free="true" storage="true"/>
+              </find_dockingbay>
+              <set_value name="$locnum_freedocks" exact="$locfreedocks.count"/>
+              <do_for_each name="$locbay" in="$locshipstorage">
+                <set_value name="$locnum_freedocks" exact="$locnum_freedocks + $locbay.shipstorage.free"/>
+              </do_for_each>
+              <do_if value="not $locnum_freedocks">
+                <debug_text text="'fleet subordinate unable to dock. moving to escort.'" chance="$debugchance"/>
+                <set_value name="$nofeedback"/>
+                <resume label="nodestination"/>
+              </do_if>
+              <remove_value name="$locnum_freedocks"/>
+              <remove_value name="$locshipstorage"/>
+              <remove_value name="$locfreedocks"/>
+            </do_if>
+            <wait exact="[10s, $waittime].min">
+              <interrupt>
+                <conditions>
+                  <check_any>
+                    <event_object_dock_assigned object="$thisship"/>
+                    <check_all>
+                      <event_object_docked_at container="$destination"/>
+                      <check_value value="$dockingatcommander?"/>
+                    </check_all>
+                  </check_any>
+                </conditions>
+              </interrupt>
+            </wait>
+            <do_if value="$dockingatcommander? and not $thisship.assigneddock.exists">
+              <resume label="requestdock"/>
+            </do_if>
+          </do_if>
+          <debug_text text="'%1 (%2) waited for %3 seconds to dock'.[$thisship.knownname, $thisship, player.age - $time_startdocking]" chance="$debugchance"/>
+          <!--<remove_value name="$time_startdocking" chance="$debugchance"/>-->
+
+          <do_if value="not $thisship.assigneddock.exists">
+            <remove_docking_request ship="$thisship" container="$destination" immediate="true"/>
+            <remove_value name="$queuedresult"/>
+            <do_if value="not $destination.isoperational or (@$thisship.order.exists and (player.age - $time_startdocking) ge $waittime)">
+              <!-- Not assigned after $waittime. 10min by default. -->
+              <debug_text text="'waited more than %6 seconds for a free dock for \'%1\' (%5) at destination \'%2\'(%3) - %4!'.[$thisship.macro.id, $destination.macro.id, $destination, this.cluster.knownname, $thisship, $waittime]" chance="$debugchance"/>
+              <set_value name="$timedout"/>
+              <resume label="nodestination"/>
+            </do_if>
+            <do_else>
+              <!-- in this case, we have to keep waiting since a ship that wants to dock and does not use orders must do so as long as $destination is still operational. -->
+              <debug_text text="'%s %s %s has not been assigned a dock after %s seconds. we must dock, so requesting dock again and waiting longer.'.[@$thisship.idcode, @$thisship.knownname, $thisship, $waittime]" chance="$debugchance"/>
+              <resume label="requestdock"/>
+            </do_else>
+          </do_if>
+        </do_if>
+        <!-- Check the if has assigned dock -->
+        <do_if value="not $thisship.assigneddock.exists">
+          <debug_text text="'docking request denied for \'%1\' at destination \'%2\'(%3) - %4!'.[$thisship.macro.id, $destination.macro.id, $destination, this.cluster.knownname]" chance="$debugchance" />
+          <resume label="nodestination"/>
+        </do_if>
+      </do_if>
+      <do_else>
+        <debug_text text="'Dock already assigned'" chance="$debugchance" />
+      </do_else>
+
+      <do_if value="$thisship.assigneddock.exists and (($building and not $thisship.assigneddock.isbuildingallowed) or ($trading and not $thisship.assigneddock.istradingallowed) or (@$thisship.assigneddock.ventureplatform != $ventureplatform))">
+        <debug_text text="'assigned dock does not allow required activity.\nbuilding: %s\ntrading: %s\nplayeronly: %s\nventureplatform: %s'.[$building, $trading, $allowplayeronly, $ventureplatform]" filter="error"/>
+      </do_if>
+      <debug_text text="'dock assigned, $useentrypos %1'.[$useentrypos]" chance="$debugchance" />
+
+      <!-- we've been assigned a dock, update $dock and also $movementdest if applicable -->
+      <do_if value="$thisship.assigneddock.isoperational">
+        <set_value name="$dock" exact="$thisship.assigneddock"/>
+        <do_if value="not $destination.isclass.ship">
+          <set_value name="$movementdest" exact="$dock"/>
+        </do_if>
+      </do_if>
+
+      <label name="movetodockingbay" />
+
+      <wait exact="100ms" sinceversion="10" comment="short pause to prevent potential infinite loop resulting from loop backs below freezing the game"/>
+
+      <!-- only proceed if $destination is:
+            operational,
+            is in the same zone,
+            and you have an assigned dock.
+
+            all of the resumes (except for waitfordockslot) lead to labels with unavoidable blocking actions so waits here should not be necessary. -->
+      <do_if value="not $destination.isoperational">
+        <debug_text text="'%1 %2 (%3) is not operational. aborting.'.[$destination.idcode, $destination.knownname, $destination]" chance="$debugchance"/>
+        <resume label="nodestination"/>
+      </do_if>
+      <do_elseif value="(this.sector != $destination.sector) or ((($destination.isclass.ship and not $destination.zone.isclass.highway) or this.zone != $movementdest.zone) and $thisship.bboxdistanceto.{$movementdest} gt [10km, $destination.size/2].max)">
+        <debug_text text="'%1 %2 (%3) and %4 are very far away, distance to assigned dock %5: %6. moving there.'.[$destination.idcode, $destination.knownname, $destination, $movementdest, $thisship.assigneddock, if $thisship.assigneddock.exists then $thisship.bboxdistanceto.{$thisship.assigneddock} else -1]" chance="$debugchance"/>
+        <resume label="movetozone"/>
+      </do_elseif>
+      <do_elseif value="not $thisship.assigneddock.exists">
+        <debug_text text="'%1 %2 (%3) did not assign us a dock. waiting to request again.'.[$destination.idcode, $destination.knownname, $destination]" chance="$debugchance"/>
+        <wait min="1s" max="3s"/>
+        <resume label="waitfordockslot"/>
+      </do_elseif>
+      <remove_value name="$quadrant_dock"/>
+      <remove_value name="$pos_approach"/>
+      <remove_value name="$dock"/>
+
+      <set_to_default_flight_control_model object="$thisship"/>
+
+      <do_if value="@$thisship.order.id == 'DockAt' or $abouttofinish">
+        <!-- order is sometimes already critical due to interrupt handlers -->
+        <!--<assert value="$abouttofinish or @$thisship.order.state == orderstate.started or @$thisship.order.state == orderstate.critical" text="'%s %s has an order that has not started yet. order: %s, order state: %s'.[$thisship.knownname, $thisship, $thisship.order.id, $thisship.order.state]" break="always"/>-->
+        <do_if value="@$thisship.order.state == orderstate.started">
+          <debug_text text="'order is now critical. docking with %s %s'.[$destination.knownname, $destination]" chance="$debugchance"/>
+          <set_order_state order="$thisship.order" state="orderstate.critical"/>
+        </do_if>
+      </do_if>
+
+      <!-- TODO @Klaus: Split up into two usecases? Arriving at station and requesting dock permission, and here the actual approach -->
+      <include_interrupt_actions ref="NPCUseCase_StartDocking" />
+
+      <set_value name="$dockmodule" exact="$thisship.assigneddock.walkablemodule" />
+      <debug_text text="'assigneddock is %s. dockmodule: %s'.[$thisship.assigneddock.macro.name, @$dockmodule]" chance="$debugchance"/>
+      <do_if value="$useentrypos and not $dockmodule">
+        <debug_text text="'dock has no dock module. skipping entrypos.'" chance="$debugchance"/>
+        <set_value name="$useentrypos" exact="false"/>
+      </do_if>
+
+      <!-- workaround: there are situations where a ship cannot plot an octree path between two points although there is otherwise a clear path between them.
+            steering fcm does not use octrees, but is not ideal, especially for big ships. -->
+      <do_if value="$retry?">
+        <set_flight_control_model object="$thisship" flightcontrolmodel="flightcontrolmodel.steering"/>
+      </do_if>
+
+      <!-- If dock is in an object and/or dockmodule with an entrypath,
+            assume that it is in something with complex geometry which requires an entry path,
+              and use it.
+           Otherwise, if useentrypos is true, use the entry pos.
+           Otherwise, go straight for the dock.
+
+           It is not always desirable to use the entrypos.
+           Remember that a dockmodule with multiple docks only has one entrypos, and all ships that want to dock and use the entrypos go to that position first
+            so situations where high traffic is expected will have ships clumping if those ships use entrypos. -->
+      <do_if value="not $thisship.iscapitalship and $destination.haswaypointpath.{$thisship.assigneddock.grouptag}.[tag.entrypath, tag.start]">
+        <debug_text text="'moving along object entry path'" chance="$debugchance" />
+        <move_waypoints object="$thisship" destination="$destination" tags="tag.entrypath" starttags="tag.start" grouptag="$thisship.assigneddock.grouptag" finishonapproach="true" flightbehaviour="flightbehaviour.generic" forcesteering="$destination.isclass.ship" relativemovement="$destination.isclass.ship">
+          <interrupt>
+            <conditions>
+              <check_any>
+                <event_object_destroyed object="$thisship.assigneddock"/>
+                <event_object_changed_cluster object="$destination"/>
+                <!--<check_all>
+                  <event_object_changed_zone object="$destination"/>
+                  <check_value value="$destination.zone != this.zone"/>
+                </check_all>-->
+              </check_any>
+            </conditions>
+            <actions>
+              <set_value name="$abort"/>
+            </actions>
+          </interrupt>
+        </move_waypoints>
+      </do_if>
+      <do_if value="not $thisship.iscapitalship and $dockmodule and not $abort?">
+
+        <!-- DockPath case. Higher priority on the approach phase -->
+        <do_if value="@$dockmodule.haswaypointpath.{$thisship.assigneddock.grouptag}.[tag.dockpath, tag.start]">
+          <debug_text text="'following dockpath'" chance="$debugchance"/>
+          <!-- disable collision response only (still use whiskers to avoid, but no actual physics collision) -->
+          <disable_collision_response object="$thisship" />
+
+          <!-- get the dockpath waypoint entry -->
+          <get_waypoint_path space="$dockmodule" tags="tag.dockpath" start_tags="tag.start" posname="$waypoints"  rotname="$waypointrots" group="$thisship.assigneddock.grouptag" />
+
+          <!-- do the the dockpath approach, with dockpath behaviour if the destination is a ship -->
+          <move_to object="$thisship" destination="$thisship.assigneddock" flightbehaviour="flightbehaviour.dockpath" forcesteering="$destination.isclass.ship" forceposition="false" finishonapproach="true" torelativemovement="true" sinceversion="14">
+            <position object="$dockmodule" value="$waypoints.{1}" />
+            <rotation yaw="$waypointrots.{1}.yaw - $thisship.assigneddock.rotation.yaw" />
+            <interrupt>
+              <conditions>
+                <check_any>
+                  <event_object_destroyed object="$thisship.assigneddock"/>
+                  <event_object_changed_cluster object="$destination"/>
+                </check_any>
+              </conditions>
+              <actions>
+                <set_value name="$abort"/>
+              </actions>
+            </interrupt>
+          </move_to>
+
+          <set_value name="$distancetomodule" exact="$dockmodule.distanceto.{$thisship}"/>
+          <!-- movement with finishonapproach ends when we are 2s away or less from the end position, so if we're 2s or less away from the first waypoint, no point looping back. -->
+          <do_if value="$distancetomodule lt ($dockmodule.size/2m) and $distancetomodule lt $dockmodule.distanceto.[$dockmodule, $waypoints.{1}] and ($thisship.distanceto.[$dockmodule, $waypoints.{1}] / [$thisship.maxspeed, 1m].max) gt 2s">
+            <debug_text text="'inside dock module. looping back to retry.'" chance="$debugchance"/>
+            <set_value name="$abort"/>
+          </do_if>
+          <remove_value name="$distancetomodule"/>
+
+          <!-- Re-check for abort conditions -->
+          <do_if value="$abort?">
+            <remove_value name="$abort"/>
+            <resume label="movetodockingbay"/>
+          </do_if>
+
+          <!-- do the the full path movement, with relative movement in case it is a moving ship -->
+          <move_to object="$thisship" destination="$thisship.assigneddock" flightbehaviour="flightbehaviour.dockpath" forcesteering="true" relativemovement="true" sinceversion="5">
+            <position object="$dockmodule" value="$waypoints.{1}"/>
+            <interrupt>
+              <conditions>
+                <check_any>
+                  <event_object_destroyed object="$thisship.assigneddock"/>
+                  <event_object_changed_cluster object="$destination"/>
+                </check_any>
+              </conditions>
+              <actions>
+                <set_value name="$abort"/>
+              </actions>
+            </interrupt>
+          </move_to>
+
+          <do_if value="not $abort?">
+            <set_value name="$atentrypos" />
+          </do_if>
+
+          <!-- remove the temp value -->
+          <remove_value name="$waypoints" />
+        </do_if>
+        <!-- Check if the Boundingbox distance to this ship is bigger than this size -->
+        <do_elseif value="$dockmodule.bboxdistanceto.{$thisship} gt $thisship.size">
+          <!-- Check if there is a valid entry path, prefer it over an entry position -->
+          <do_if value="$dockmodule.haswaypointpath.{$thisship.assigneddock.grouptag}.[tag.entrypath, tag.start]">
+            <debug_text text="'moving along dock area entry path'" chance="$debugchance" />
+            <move_waypoints object="$thisship" destination="$dockmodule" tags="tag.entrypath" starttags="tag.start" grouptag="$thisship.assigneddock.grouptag" finishonapproach="true" flightbehaviour="flightbehaviour.generic" forcesteering="$destination.isclass.ship" relativemovement="$destination.isclass.ship" abortpath="false">
+              <interrupt>
+                <conditions>
+                  <check_any>
+                    <event_object_destroyed object="$thisship.assigneddock"/>
+                    <event_object_changed_cluster object="$destination"/>
+                    <!--<check_all>
+                      <event_object_changed_zone object="$destination"/>
+                      <check_value value="$destination.zone != this.zone"/>
+                    </check_all>-->
+                  </check_any>
+                </conditions>
+                <actions>
+                  <set_value name="$abort"/>
+                </actions>
+              </interrupt>
+            </move_waypoints>
+            <do_if value="this.sector != $destination.sector or (this.zone != $movementdest.zone and $thisship.bboxdistanceto.{$movementdest} gt 10km)">
+              <debug_text text="'after moving along dockmodule entry path: %1 %2 (%3) is very far away. aborting to move there.'.[$destination.idcode, $destination.knownname, $destination]" chance="$debugchance"/>
+              <set_value name="$abort"/>
+            </do_if>
+            <do_if value="not $abort?">
+              <set_value name="$atentrypos" />
+            </do_if>
+          </do_if>
+          <!-- Now check if there is a valid entry position -->
+          <do_elseif value="$useentrypos and $dockmodule.hasentrypos">
+            <debug_text text="'moving to entry position'" chance="$debugchance" />
+            <move_to object="$thisship" destination="$dockmodule" finishonapproach="true" flightbehaviour="flightbehaviour.dock" forcesteering="$destination.isclass.ship" torelativemovement="$destination.isclass.ship" forceposition="false" forcerotation="false" abortpath="$thisship.bboxdistanceto.{$dockmodule.container} le 0" radius="100">
+              <position object="$dockmodule" value="$dockmodule.entrypos"/>
+              <interrupt>
+                <conditions>
+                  <check_any>
+                    <check_all>
+                      <!-- PATCH 3.00 change: if the game was saved during this move_to we may be trying to fly to an entrypos that no longer exists because several dockareas had their entrypos connection removed for version 3.00 -->
+                      <event_game_loaded />
+                      <check_value value="not $dockmodule.hasentrypos"/>
+                      <debug_text text="'skipping move_to to entrypos while docking because entrypos has been removed from dockmodule'" filter="savegame"/>
+                    </check_all>
+                    <event_object_destroyed object="$thisship.assigneddock"/>
+                    <event_object_changed_cluster object="$destination"/>
+                    <!--<check_all>
+                      <event_object_changed_zone object="$destination"/>
+                      <check_value value="$destination.zone != this.zone"/>
+                    </check_all>-->
+                  </check_any>
+                </conditions>
+                <actions>
+                  <!-- if we interrupt because of a removed entrypos, do not abort completely, let the script continue as normal -->
+                  <do_if value="event.name != 'event_game_loaded'">
+                    <set_value name="$abort"/>
+                  </do_if>
+                </actions>
+              </interrupt>
+            </move_to>
+            <do_if value="this.sector != $destination.sector or (this.zone != $movementdest.zone and $thisship.bboxdistanceto.{$movementdest} gt 10km)">
+              <debug_text text="'after moving to dock area entry position: %1 %2 (%3) is very far away. aborting to move there.'.[$destination.idcode, $destination.knownname, $destination]" chance="$debugchance"/>
+              <set_value name="$abort"/>
+            </do_if>
+            <do_if value="not $abort?">
+              <set_value name="$atentrypos" />
+            </do_if>
+          </do_elseif>
+          <!-- Dock area does not define entry path or position, we can only assume it's trivial to fly to the dock -->
+        </do_elseif>
+      </do_if>
+
+      <do_if value="($destination.isoperational and $atentrypos? and not $abort?)">
+        <!-- from this point, there should be line of sight to the todockpos, so NOT use collision avoidance -->
+        <set_avoid_collisions object="$thisship" bigobjects="false" smallobjects="true" />
+      </do_if>
+
+      <remove_value name="$atentrypos"/>
+
+      <label name="movetodockpos" />
+
+      <debug_text text="'$destination.isoperational: %s, $thisship.assigneddock.exists: %s, not $abort? %s'.[$destination.isoperational, $thisship.assigneddock.exists, not $abort?]" chance="$debugchance"/>
+      <do_if value="this.sector != $destination.sector or (this.zone != $movementdest.zone and $thisship.bboxdistanceto.{$movementdest} gt [10km, $destination.size/2].max)">
+        <debug_text text="'before moving to dockpos destination: %1 %2 (%3) is very far away. aborting to move there.'.[$destination.idcode, $destination.knownname, $destination]" chance="$debugchance"/>
+        <set_value name="$abort"/>
+      </do_if>
+      <do_if value="$destination.isoperational and $thisship.assigneddock.exists and not $abort?">
+        <do_if value="@$destination.defencenpc.$blockingdockapproach == $thisship">
+          <debug_text text="'on final approach. docking approach was blocked by us. clearing block.'" chance="$debugchance"/>
+          <remove_value name="$destination.defencenpc.$blockingdockapproach"/>
+        </do_if>
+
+        <debug_text text="'moving to todockpos'" chance="$debugchance"/>
+        <!-- TODO: remove this disable_collisions_between here when docking bay assets are correct -->
+        <do_if value="$thisship.assigneddock.isventureronly">
+          <disable_collisions_between object="$thisship" target="$destination" />
+        </do_if>
+        <!-- disable collision response only (still use whiskers to avoid, but no actual physics collision) -->
+        <!--<disable_collision_response object="$thisship" />-->
+        <!-- First part of the docking. Movemenent to 'todockpos' -->
+        <move_docking object="$thisship" dock="$thisship.assigneddock" forcesteering="not $thisship.iscapitalship and $destination.isclass.ship and not $thisship.zone.isclass.highway" flightbehaviour="flightbehaviour.dock" finishonapproach="not $destination.isclass.ship" forceposition="false" forcerotation="false" relativemovementrange="if this.ship.isclass.spacesuit then (($thisship.size + $thisship.assigneddock.container.size) * 1.1) else 0m">
+          <interrupt>
+            <conditions>
+              <check_any>
+                <event_object_destroyed object="$thisship.assigneddock"/>
+                <event_object_changed_cluster object="$destination"/>
+              </check_any>
+            </conditions>
+            <actions>
+              <set_value name="$abort"/>
+            </actions>
+          </interrupt>
+        </move_docking>
+      </do_if>
+
+      <do_if value="$abort?">
+        <remove_value name="$abort"/>
+        <resume label="movetodockingbay"/>
+      </do_if>
+      <do_elseif value="$destination.isoperational and $thisship.assigneddock.exists">
+        <debug_text text="player.age + ': dock!'" chance="$debugchance" />
+        <do_if value="$destination.sector and (@$thisship.sector != @$destination.sector)">
+          <debug_text text="'%s %s (%s) was about to dock but is in the wrong sector. attempting recovery.'.[this.object.idcode, this.object.knownname, this.object]" chance="$debugchance"/>
+          <resume label="movetozone"/>
+        </do_if>
+        <assert value="$thisship.assigneddock.container == $destination" text="'The dock assigned to %s %s (%s) is connected to a different container.'.[this.object.idcode, this.object.knownname, this.object]"/>
+
+        <do_if value="$thisship.isunit and ($destination != $thisship.commander) and ($destination.units.{$thisship.unitcategory}.count gt $destination.availableunits.{$thisship.unitcategory}.count)">
+          <set_value name="$locnum_unaccountedfor" exact="$destination.units.{$thisship.unitcategory}.count - $destination.availableunits.{$thisship.unitcategory}.count"/>
+          <do_for_each name="$locsub" in="$destination.allsubordinates">
+            <do_if value="($locnum_unaccountedfor gt 0) and $locsub.isunit">
+              <set_value name="$locnum_unaccountedfor" exact="$locnum_unaccountedfor - 1"/>
+            </do_if>
+          </do_for_each>
+          <do_if value="$locnum_unaccountedfor gt 0">
+            <set_object_commander object="$thisship" commander="$destination"/>
+          </do_if>
+          <remove_value name="$locnum_unaccountedfor"/>
+        </do_if>
+
+        <!-- Activate landing gears and competely disable collisions -->
+        <!--<disable_collisions_between object="$thisship" target="$destination"/>-->
+
+        <dock ship="$thisship" />
+
+        <do_if value="$thisship.isunit and this.inventory.count and $destination.isoperational and (@$destination.pilot.exists or @$destination.tradenpc.exists or (($destination == player.ship) and this.isplayerowned))">
+          <set_value name="$locentity" exact="null"/>
+          <do_if value="($destination == player.ship) and this.isplayerowned">
+            <set_value name="$locentity" exact="player.entity"/>
+          </do_if>
+          <do_elseif value="@$destination.pilot.exists">
+            <set_value name="$locentity" exact="$destination.pilot"/>
+          </do_elseif>
+          <do_elseif value="@$destination.tradenpc.exists">
+            <set_value name="$locentity" exact="$destination.tradenpc"/>
+          </do_elseif>
+          <do_if value="$locentity.exists">
+            <do_for_each name="$locitem" valuename="$locamount" in="this.inventory.table">
+              <do_if value="this.inventory.{$locitem}.exists">
+                <add_inventory entity="$locentity" ware="$locitem" exact="$locamount"/>
+                <remove_inventory entity="this" ware="$locitem" exact="$locamount"/>
+              </do_if>
+            </do_for_each>
+          </do_if>
+          <remove_value name="$locentity"/>
+        </do_if>
+
+        <!-- below should no longer be necessary since we don't change $destination's flight control model anymore. -->
+        <!--<do_if value="$destination.isclass.ship_m">
+          <set_to_default_flight_control_model object="$destination"/>
+        </do_if>-->
+
+        <!-- NB: dock action can fail, but it won't be immediately apparent. -->
+        <!-- this wait is to account for the time needed by the dock action. -->
+        <wait exact="30s" sinceversion="7" comment="important to allow any animations associated with the dock action to finish.">
+          <interrupt>
+            <conditions>
+              <!-- NB: most cases involve ship being connected to dock while the ship is still moving, before the docked event is dispatched. -->
+              <event_object_docked object="$thisship"/>
+            </conditions>
+          </interrupt>
+        </wait>
+
+        <do_if value="$spacesuittransfer and $thisship.isclass.spacesuit">
+          <do_if value="this.trueowner == $destination.trueowner">
+            <debug_text text="'%s %s transferring from %s %s %s to %s %s %s'.[this.knownname, this, @$thisship.idcode, @$thisship.knownname, $thisship, @$destination.idcode, @$destination.knownname, $destination]" chance="$debugchance"/>
+            <create_npc_template entity="this" object="$destination" role="entityrole.unassigned" force="true"/>
+          </do_if>
+          <destroy_object object="$thisship" explosion="false"/>
+        </do_if>
+
+        <do_if value="$thisship.dock == null">
+          <debug_text text="'order.dock returns true but we are not docked! attempting to recover.'" filter="error"/>
+          <resume label="movetodockingbay"/>
+        </do_if>
+
+        <do_if value="$dockfollowers and not $subordinateorders.count">
+          <set_value name="$subordinates" exact="$thisship.subordinates" />
+          <set_value name="$locsubordinateorders" exact="[]"/>
+          <do_all exact="$subordinates.count" counter="$i">
+            <!-- at the moment, this is only used by drone squads. if we ever apply $dockfollowers to other groups and want them to dock immediately, review below.
+              NB: setting them to DockAt or DockAndWait with immediate="true" will have them immediately undock if they have ANY orders in their queue. -->
+            <do_if value="$subordinates.{$i}.isunit">
+              <do_all exact="$subordinates.{$i}.orders.count" counter="$j" reverse="true">
+                <cancel_order order="$subordinates.{$i}.orders.{$j}"/>
+              </do_all>
+              <do_if value="$thisship.commander">
+                <!-- Change commander of subordinates, to not let them promote when this ship docks -->
+                <set_object_commander object="$subordinates.{$i}" commander="$thisship.commander" />
+              </do_if>
+            </do_if>
+            <do_elseif value="not $subordinates.{$i}.iscapitalship and @$subordinates.{$i}.dock.container != $thisship">
+              <do_if value="$internalorder and (not $callerid or not $callerid.exists or not $callerid.$subordinateorders?)">
+                <!-- this happens when the DockAndWait order of a ship is docked while it is already at DockAt. will result in the ship immediately undocking. safe to simply not order subordinates to dock in this case. -->
+                <debug_text text="'order.dock called with dockfollowers but no callerid. we have no place to store the subordinateorders. NOT ordering subordinates to dock.'" chance="$debugchance"/>
+              </do_if>
+              <do_else>
+                <do_all exact="$subordinates.{$i}.orders.count + 1" counter="$j">
+                  <do_if value="$j gt $subordinates.{$i}.orders.count">
+                    <set_value name="$immediatedockorder"/>
+                  </do_if>
+                  <do_elseif value="$subordinates.{$i}.orders.{$j}.id == 'Resupply' or $subordinates.{$i}.orders.{$j}.id == 'Equip' or $subordinates.{$i}.orders.{$j}.id == 'Repair' or $subordinates.{$i}.orders.{$j}.id == 'DockAt' or $subordinates.{$i}.orders.{$j}.id == 'DockAndWait'">
+                    <set_value name="$immediatedockorder" exact="false"/>
+                    <break/>
+                  </do_elseif>
+                </do_all>
+                <create_order object="$subordinates.{$i}" name="$order_sub" id="'DockAndWait'" immediate="$immediatedockorder">
+                  <param name="destination" value="$destination"/>
+                  <param name="dockfollowers" value="$dockfollowers"/>
+                  <param name="isdockfollower" value="true"/>
+                  <param name="callerid" value="if $dockandwaitid then $dockandwaitid else $callerid"/>
+                  <param name="internalorder" value="true"/>
+                  <param name="debugchance" value="$debugchance"/>
+                </create_order>
+                <debug_text text="player.age + ': 2 %s %s %s ordering %s %s %s to dock. sub order: %s, this order: %s, caller: %s'.[@this.assignedcontrolled.idcode, @this.assignedcontrolled.knownname, this.assignedcontrolled, @$subordinates.{$i}.idcode, @$subordinates.{$i}.knownname, $subordinates.{$i}, $order_sub, $thisship.order, @$callerid.id]" chance="0"/>
+                <append_to_list name="$locsubordinateorders" exact="$order_sub"/>
+                <debug_text text="'adding order: %s %s for %s %s to subordinateorders. num recorded orders: %s'.[$order_sub.id, $order_sub, $subordinates.{$i}.knownname, $subordinates.{$i}, $locsubordinateorders.count]" chance="$debugchance"/>
+                <remove_value name="$order_sub"/>
+                <remove_value name="$immediatedockorder"/>
+              </do_else>
+            </do_elseif>
+          </do_all>
+          <do_if value="$locsubordinateorders?">
+            <set_value name="$subordinateorders" exact="$locsubordinateorders"/>
+            <!-- NB: $subordinateorders has to be passed into both $callerid and $dockandwaitid. $callerid to handle undocking, and in $dockandwaitid in case this is destroyed after this order but before callerid runs. -->
+            <do_if value="@$callerid.exists and $callerid.$subordinateorders? and $locsubordinateorders.count">
+              <debug_text text="'passing %s subordinate orders to order %s'.[$locsubordinateorders.count, $callerid.id]" chance="$debugchance"/>
+              <edit_order_param order="$callerid" param="'subordinateorders'" value="$locsubordinateorders"/>
+            </do_if>
+            <do_if value="@$dockandwaitid.exists and $dockandwaitid.$subordinateorders? and $locsubordinateorders.count">
+              <debug_text text="'passing %s subordinate orders to order %s'.[$locsubordinateorders.count, $dockandwaitid.id]" chance="$debugchance"/>
+              <edit_order_param order="$dockandwaitid" param="'subordinateorders'" value="$locsubordinateorders"/>
+            </do_if>
+            <remove_value name="$locsubordinateorders"/>
+          </do_if>
+          <remove_value name="$subordinates" />
+        </do_if>
+      </do_elseif>
+
+      <label name="finish"/>
+
+      <set_to_default_flight_control_model object="$thisship"/>
+      <enable_collision_response object="$thisship"/>
+
+      <do_if value="not $park? and not $thisship.isclass.ship_xs">
+        <do_if value="not $thisship.dock">
+          <wait min="25s" max="31s">
+            <interrupt>
+              <conditions>
+                <event_object_docked object="$thisship"/>
+                <debug_text text="'dock: %s'.[$thisship.dock.macro]" debugchance="$debugchance"/>
+              </conditions>
+            </interrupt>
+          </wait>
+        </do_if>
+        <do_if value="$store">
+          <do_if value="not $thisship.dock.isstorage">
+            <!-- NB: request is not guaranteed to succeed -->
+            <request_store_ship object="$destination" ship="$thisship"/>
+            <wait exact="1min" sinceversion="19">
+              <interrupt>
+                <conditions>
+                  <event_object_moved_into_internal_storage object="$thisship"/>
+                  <debug_text text="'dock: %s'.[$thisship.dock.macro]" debugchance="$debugchance"/>
+                </conditions>
+              </interrupt>
+            </wait>
+          </do_if>
+          <do_if value="not $thisship.dock.isstorage">
+            <debug_text text="'INFO: %s %s %s was not placed in shipstorage. valid'.[@$thisship.idcode, @$thisship.knownname, $thisship]" filter="scripts"/>
+          </do_if>
+        </do_if>
+      </do_if>
+
+      <do_if value="$internalorder and ($thisship.order != $thisship.defaultorder)">
+        <clear_recurring_order_failure object="$thisship" id="$thisship.order.id"/>
+      </do_if>
+
+      <return value="true">
+        <retval name="subordinateorders" value="$subordinateorders"/>
+      </return>
+
+      <label name="nodestination" />
+
+      <do_if value="@$thisship.order.isrunning">
+        <do_if value="not @$failuretext">
+          <set_value name="$failuretext" exact="{1045, 101}" comment="Unable to reach destination."/>
+        </do_if>
+        <set_order_failed order="$thisship.order" text="$failuretext" recurring="$internalorder and ($thisship.order != $thisship.defaultorder)"/>
+      </do_if>
+
+      <do_if value="not $nofeedback? and this.isplayerowned and not $thisship.isunit and this.shouldwarnplayer and this.isclass.npc and notification.npc_order_not_complete.active">
+        <run_script name="'player.interaction'" sinceversion="1">
+          <param name="Line" value="10303" comment="Last order could not be completed."/>
+          <param name="MaxQueueDelay" value="10s"/>
+          <param name="caption" value="{1041, 10133} + ' - ' + {1016,6}.[this.assignedcontrolled.knownname, this.assignedcontrolled.idcode]" comment="Unable to dock"/>
+          <param name="interactive" value="false"/>
+          <param name="debugchance" value="$debugchance"/>
+        </run_script>
+      </do_if>
+
+      <do_if value="$retry?">
+        <set_to_default_flight_control_model object="$thisship"/>
+      </do_if>
+
+      <!-- Handle invalid or destroyed destination -->
+      <do_if value="$destination.exists and $destination.isclass.container">
+        <do_if value="@$destination.defencenpc.$blockingdockapproach == $thisship">
+          <remove_value name="$destination.defencenpc.$blockingdockapproach"/>
+        </do_if>
+        <remove_docking_request ship="$thisship" container="$destination" immediate="true"/>
+        <enable_collisions_between object="$thisship" target="$destination"/>
+      </do_if>
+      <!--<enable_collision_response object="$thisship"/>-->
+      <reset_avoid_collisions object="$thisship"/>
+
+      <do_all exact="$subordinateorders.count" counter="$i" reverse="true">
+        <debug_text text="'nodestination: cancelling docking order of subordinate %s.'.[$i]" chance="$debugchance"/>
+        <do_if value="$subordinateorders.{$i}.exists">
+          <cancel_order order="$subordinateorders.{$i}"/>
+        </do_if>
+      </do_all>
+
+      <do_if value="$dockandwaitid.exists">
+        <do_if value="@$dockandwaitid.$undockhandler.exists">
+          <debug_text text="'nodestination: %s %s aborting undockhandler: %s %s attached to dock and wait order'.[$thisship.knownname, $thisship, $dockandwaitid.$undockhandler.id, $dockandwaitid.$undockhandler]" chance="$debugchance"/>
+          <cancel_order order="$dockandwaitid.$undockhandler"/>
+        </do_if>
+        <debug_text text="'nodestination: %s %s aborting attached dock and wait order'.[$thisship.knownname, $thisship]" chance="$debugchance"/>
+        <cancel_order order="$dockandwaitid"/>
+      </do_if>
+
+      <do_if value="$callerid and $callerid.$cannotdock?">
+        <do_if value="not $timedout?">
+          <debug_text text="'%1(%2) is unable to dock at %3(%4)'.[$thisship.knownname, $thisship.idcode, $destination.knownname, $destination.idcode]" chance="$debugchance" />
+          <!--<assert value="false" text="'%1(%2) is unable to dock at %3(%4)'.[$thisship.knownname, $thisship.idcode, $destination.knownname, $destination.idcode]" break="always"/>-->
+        </do_if>
+        <edit_order_param order="$callerid" param="'cannotdock'" value="true"/>
+      </do_if>
+      <do_else>
+        <!-- NB: in most cases, this order in the order queue is followed by either an order that does not require docking or the default order, in which cases, it is fine. possible infinite loop if an order calls DockAndWait immediately, in which case, add handling as described below. -->
+        <debug_text text="'should we cancel the order that created DockAndWait? we cannot do so. pass in $callerid to DockaAndWait, add $cannotdock parameter to the order and handling in the order script.\n callerid: %s %s\n isparameditable: %s\n  critical? %s\n  default? %s\n  finish? %s\n  state: %s'.[@$callerid.id, $callerid, @$callerid.isparameditable.cannotdock, @$callerid.state == orderstate.critical, $callerid == $thisship.defaultorder, @$callerid.state == orderstate.finish, @$callerid.state]" chance="$debugchance"/>
+        <!--<assert value="false" text="'entity: %s %s, object: %s %s %s. check debug output. first four orders:\n %s,\n %s,\n %s,\n %s'.[this.knownname, this, $thisship.idcode, $thisship.knownname, $thisship, @$thisship.orders.{1}.id, @$thisship.orders.{2}.id, @$thisship.orders.{3}.id, @$thisship.orders.{4}.id]" break="0"/>-->
+      </do_else>
+
+      <do_if value="not $destination.exists or not $destination.isoperational">
+        <debug_text text="'Invalid Destination: operational %1, exists %2'.[$destination.isoperational, $destination.exists]" chance="$debugchance"/>
+      </do_if>
+      <do_elseif value="$dockingatcommander?">
+        <debug_text text="'unable to dock at commander. docks are full.'" chance="$debugchance"/>
+      </do_elseif>
+      <do_elseif value="@$thisship.order.state == orderstate.critical">
+        <debug_text text="'Order to dock interrupted during critical state. docked at: %s %s assigned dock at: %s %s (should be null)'.[@$thisship.dock.container.knownname, @$thisship.dock.container, @$thisship.assigneddock.container.knownname, @$thisship.assigneddock.container]" chance="$debugchance"/>
+      </do_elseif>
+      <do_else>
+        <debug_text text="'dock order went to nodestination. unknown conditions.'" chance="$debugchance"/>
+      </do_else>
+
+      <!-- If it's a unit with no destination, destroy the orphan -->
+      <do_if value="$thisship.isunit">
+        <destroy_object object="$thisship" explosion="false"/>
+        <!-- there can be a delay before unit is destroyed. the wait assures that no further actions are done until destruction is done. -->
+        <wait sinceversion="4"/>
+      </do_if>
+
+      <return value="false">
+        <retval name="subordinateorders" value="$subordinateorders"/>
+      </return>
+
+    </actions>
+  </attention>
+  <on_abort>
+    <do_if value="$thisship.exists">
+      <!--Ship may have been interrupted from docking and so has a docking connection but is not docked-->
+      <debug_text text="'docking at %1(%2) was aborted for some reason, disconnecting docking connection!'.[@$thisship.assigneddock.container.knownname, @$thisship.assigneddock.container]" chance="$debugchance" />
+
+      <do_if value="$destination.exists and $destination.isclass.container">
+        <remove_docking_request ship="$thisship" container="$destination" immediate="true"/>
+      </do_if>
+      <debug_text text="'on_abort: docking request between %s %s (%s) and %s %s (%s) removed.\nassigned dock: %s.\ndocked? %s.\ncurrent order: %s.'.[this.object.idcode, this.object.knownname, this.object, @$destination.idcode, @$destination.knownname, @$destination, this.object.assigneddock, this.object.dock, @this.object.order.id]" chance="$debugchance"/>
+      <assert value="not $thisship.assigneddock or $thisship.dock" text="'docking request between %s %s (%s) and %s %s (%s) was not successfully removed.'.[this.object.idcode, this.object.knownname, this.object, @$destination.idcode, @$destination.knownname, @$destination]"/>
+      <do_if value="$destination.exists and (not $thisship.dock or $thisship.dock.container != $destination)">
+        <!--<enable_collisions_between object="$thisship" target="$destination" />-->
+      </do_if>
+      <reset_avoid_collisions object="$thisship"/>
+      <enable_collision_response object="$thisship"/>
+      <!--<do_if value="@$destination.isclass.ship_m">
+        <set_to_default_flight_control_model object="$destination"/>
+      </do_if>-->
+      <set_to_default_flight_control_model object="$thisship"/>
+    </do_if>
+    <do_all exact="@$subordinateorders.count" counter="$i" reverse="true">
+      <debug_text text="player.age + ': on_abort: cancelling docking order of subordinate %s %s %s. order: %s'.[@$subordinateorders.{$i}.object.idcode, @$subordinateorders.{$i}.object.knownname, $subordinateorders.{$i}.object, $subordinateorders.{$i}]" chance="$debugchance"/>
+      <do_if value="$subordinateorders.{$i}.exists">
+        <cancel_order order="$subordinateorders.{$i}"/>
+      </do_if>
+    </do_all>
+    <do_if value="@$destination.defencenpc.$blockingdockapproach == $thisship">
+      <remove_value name="$destination.defencenpc.$blockingdockapproach"/>
+    </do_if>
+    <!-- order is aborted, but is still in the object's queue, so don't cancel the calling orders. -->
+    <!--<do_if value="$dockandwaitid.exists">
+      <do_if value="$dockandwaitid.$undockhandler.exists">
+        <debug_text text="'on_abort: %s %s aborting undockhandler: %s %s attached to dock and wait order'.[$thisship.knownname, $thisship, $dockandwaitid.$undockhandler.id, $dockandwaitid.$undockhandler]" chance="$debugchance"/>
+        <cancel_order order="$dockandwaitid.$undockhandler"/>
+      </do_if>
+      <debug_text text="'on_abort: %s %s aborting attached dock and wait order'.[$thisship.knownname, $thisship]" chance="$debugchance"/>
+      <cancel_order order="$dockandwaitid"/>
+    </do_if>-->
+    <do_if value="$dockandwaitid.exists and @$dockandwaitid.$dockorder and not $dockandwaitid.$dockorder.exists">
+      <!-- this should only be the case if the player removes this dockat order or if it is explicitly cancelled. -->
+      <!-- NB: we cannot also do this if the attached dockandwait order is cancelled because that order will not be running and will not run its on_abort node.
+                interrupt handler for this also does not work since we only have an event for the running order being cancelled. -->
+      <do_if value="$callerid.exists and $callerid.$cannotdock?">
+        <!-- tell the caller that we cannot dock to prevent it immediately adding another order to dock. -->
+        <edit_order_param order="$callerid" param="'cannotdock'" value="true"/>
+      </do_if>
+      <do_if value="$dockandwaitid != this.assignedcontrolled.defaultorder">
+        <cancel_order order="$dockandwaitid"/>
+      </do_if>
+    </do_if>
+  </on_abort>
+</aiscript>

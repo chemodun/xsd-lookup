@@ -1,0 +1,54 @@
+{
+  "name": "xsd-lookup",
+  "version": "1.0.0",
+  "description": "Multi-schema XSD lookup utility",
+  "main": "dist/XsdReference.js",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rimraf dist",
+    "rebuild": "npm run clean && npm run build",
+    "test": "node tests/test_all_files_comprehensive.js",
+    "test:full": "npm run build && npm test",
+    "prepublishOnly": "npm run rebuild && npm test"
+  },
+  "author": "Chem O'Dun <chemodun@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chemodun/xsd-lookup.git"
+  },
+  "bugs": {
+    "url": "https://github.com/chemodun/xsd-lookup/issues"
+  },
+  "homepage": "https://github.com/chemodun/xsd-lookup#readme",
+  "keywords": [
+    "xsd",
+    "xml",
+    "validation",
+    "schema",
+    "x4",
+    "x4-foundations",
+    "modding",
+    "typescript"
+  ],
+  "files": [
+    "dist/**/*",
+    "src/**/*",
+    "tests/data/**/*",
+    "README.md",
+    "LICENSE",
+    "tsconfig.json"
+  ],
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/xmldom": "^0.1.34",
+    "rimraf": "^5.0.0",
+    "typescript": "^4.9.0"
+  },
+  "dependencies": {
+    "xmldom": "^0.6.0"
+  },
+  "engines": {
+    "node": ">= 18.0.0"
+  }
+}
