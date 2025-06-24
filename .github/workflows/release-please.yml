@@ -1,0 +1,136 @@
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: write
+
+name: release-please
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          # this assumes that you have created a personal access token
+          # (PAT) and configured it as a GitHub action secret named
+          # `MY_RELEASE_PLEASE_TOKEN` (this secret name is not important).
+          token: ${{ secrets.MY_RELEASE_PLEASE_TOKEN }}
+          # optional. customize path to release-please-config.json
+          config-file: release-please-config.json
+          # optional. customize path to .release-please-manifest.json
+          manifest-file: .release-please-manifest.json
+      # The logic below handles the npm publication:
+
+      -
+        uses: actions/checkout@v4
+        # these if statements ensure that a publication only occurs when
+        # a new release is created:
+        if: ${{ steps.release.outputs.release_created }}
+
+      -
+        uses: actions/checkout@v4
+        # this step checks out the PR branch that was created by release-please
+        if: ${{ steps.release.outputs.pr }}
+        with:
+          ref: ${{ fromJson(steps.release.outputs.pr).headBranchName }}
+          token: ${{ secrets.MY_RELEASE_PLEASE_TOKEN }}
+
+      -
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          registry-url: 'https://registry.npmjs.org'
+
+      -
+        run: npm ci
+        if: ${{ steps.release.outputs.release_created }}
+
+      -
+        name: Run tests
+        run: npm test -- --ci
+        if: ${{ steps.release.outputs.release_created }}
+        id: test
+
+      -
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{secrets.NPM_TOKEN}}
+        if: ${{ steps.release.outputs.release_created && steps.test.conclusion == 'success' }}
+
+      -
+        name: Publish Test Results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        id: test-results
+        if: ${{ steps.release.outputs.release_created && ( failure() || success() ) }}
+        with:
+          check_name: "Test Results on Release (${{ github.event.workflow_run.event || github.event_name }})"
+          files: "test-results/**/*.xml"
+          comment_mode: "off"
+
+      -
+        name: Check URL
+        if: ${{ failure()  && steps.release.outputs.release_created && steps.test.conclusion != 'success'  }}
+        run: |
+          echo "CHECK_URL=${{ fromJSON( steps.test-results.outputs.json ).check_url }}" >> $GITHUB_ENV
+
+      -
+        name: Create issue if tests fail
+        if: ${{ failure() && steps.release.outputs.release_created && steps.test.conclusion != 'success' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const releaseVersion = context.payload.release.tag_name;
+            const checkUrl = process.env.CHECK_URL;
+            const issueTitle = `Test Failure in Release Workflow for version ${releaseVersion}`;
+            const issueBody = `
+              The tests failed during the release workflow for version ${releaseVersion}.
+
+              **Workflow:** ${context.workflow}
+              **Job:** ${context.job}
+              **Run:** ${context.runId}
+              **Commit:** ${context.sha}
+
+              Please check the [Test results](${checkUrl}) for more details.
+            `;
+
+            const existingIssues = await github.rest.issues.listForRepo({
+              owner,
+              repo,
+              state: 'open',
+              labels: 'test-failure'
+            });
+
+            const issueExists = existingIssues.data.some(issue => issue.title === issueTitle);
+
+            if (!issueExists) {
+              await github.rest.issues.create({
+                owner,
+                repo,
+                title: issueTitle,
+                body: issueBody,
+                labels: ['test-failure']
+              });
+            }
+
+      -
+        name: Run CHANGELOG.md through markdownlint-cli2
+        if: ${{ steps.release.outputs.pr }}
+        run: npx markdownlint-cli2 CHANGELOG.md --fix
+
+      -
+        name: Commit and push
+        if: ${{ steps.release.outputs.pr }}
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: 'CHANGELOG.md'
+          message: 'chore: run CHANGELOG.md through markdownlint-cli2'
+          default_author: user_info
