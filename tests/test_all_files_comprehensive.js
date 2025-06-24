@@ -1,5 +1,5 @@
-const { XsdReference } = require('../dist/XsdReference');
-const { XsdDetector } = require('../dist/XsdDetector');
+const { XsdReference } = require('../dist/XsdReference') || require('./dist/XsdReference.js');
+const { XsdDetector } = require('../dist/XsdDetector') || require('./dist/XsdDetector.js');
 const fs = require('fs');
 const path = require('path');
 const { DOMParser } = require('xmldom');
@@ -42,7 +42,7 @@ function extractElementsFromXml(xmlContent, filePath) {
 
       const elementName = node.nodeName;
       const currentHierarchy = [...hierarchyPath];
-      
+
       elements.push({
         name: elementName,
         hierarchy: currentHierarchy,
@@ -140,7 +140,7 @@ function validateElement(schemaName, elementInfo, filePath) {
       });
     } else if (validAttributeNames.includes(attr)) {
       results.validAttributes.push(attr);
-      
+
       // Get detailed attribute info for enhanced validation
       const attrInfo = schemaAttributes.find(a => a.name === attr);
       const validationDetail = {
@@ -153,14 +153,14 @@ function validateElement(schemaName, elementInfo, filePath) {
       };      // Validate attribute value (all defined attributes should be validated)
       const value = (attributeValues && attributeValues[attr] !== undefined) ? attributeValues[attr] : '';
       const valueValidation = xsdRef.validateAttributeValue(schemaName, name, attr, value, hierarchy);
-      
+
       validationDetail.value = value || '(empty)';
       validationDetail.valueValid = valueValidation.isValid;
-      
+
       if (!valueValidation.isValid) {
         validationDetail.status = 'invalid_value';
         validationDetail.error = valueValidation.errorMessage;
-          
+
         results.invalidAttributeValues.push({
           attribute: attr,
           value: value,
@@ -169,48 +169,48 @@ function validateElement(schemaName, elementInfo, filePath) {
           patterns: attrInfo?.patterns,
           enumValues: attrInfo?.enumValues
         });
-        
+
         // FAIL IMMEDIATELY on invalid attribute values with enhanced error info
         console.error(`❌ ATTRIBUTE VALUE VALIDATION FAILED: Element '${name}' attribute '${attr}' has invalid value '${value}'`);
         console.error(`   Hierarchy: [${hierarchy.join(' > ')}]`);
         console.error(`   Attribute type: ${attrInfo?.type || 'unknown'}`);
         console.error(`   Error: ${valueValidation.errorMessage}`);
-        
+
         if (attrInfo?.enumValues && attrInfo.enumValues.length > 0) {
           console.error(`   Allowed values: ${attrInfo.enumValues.join(', ')}`);
         }
-        
+
         if (attrInfo?.patterns && attrInfo.patterns.length > 0) {
           console.error(`   Required pattern(s):`);
           attrInfo.patterns.forEach((pattern, index) => {
             console.error(`     Pattern ${index + 1}: ${pattern}`);
           });
         }
-        
+
         if (attrInfo?.minLength !== undefined || attrInfo?.maxLength !== undefined) {
           console.error(`   Length constraints: min=${attrInfo.minLength || 'none'}, max=${attrInfo.maxLength || 'none'}`);
         }
         if (attrInfo?.minInclusive !== undefined || attrInfo?.maxInclusive !== undefined) {
           console.error(`   Numeric range: min=${attrInfo.minInclusive || 'none'}, max=${attrInfo.maxInclusive || 'none'}`);
         }
-        
+
         console.error(`   File: ${filePath}`);
         process.exit(1); // Fail immediately
       } else {
         validationDetail.status = 'valid_value';
       }
-      
+
       results.attributeValidationDetails.push(validationDetail);
     } else {
       results.invalidAttributes.push(attr);
-      
+
       results.attributeValidationDetails.push({
         name: attr,
         status: 'invalid_attribute',
         value: attributeValues?.[attr],
         error: 'Attribute not defined in schema'
       });
-      
+
       // FAIL IMMEDIATELY on invalid attributes with enhanced error info
       console.error(`❌ ATTRIBUTE VALIDATION FAILED: Element '${name}' has invalid attribute '${attr}'`);
       console.error(`   Hierarchy: [${hierarchy.join(' > ')}]`);
@@ -315,7 +315,7 @@ function testDirectory(dirInfo) {
               fileAttributeValuesValid++;
             }
           }
-          
+
           // Track attribute types
           if (detail.type && detail.type !== 'unknown') {
             attributeTypeStats[detail.type] = (attributeTypeStats[detail.type] || 0) + 1;
@@ -341,7 +341,7 @@ function testDirectory(dirInfo) {
           if (detail.status !== 'skipped' && detail.valueValid) {
             validAttributeValues++;
           }
-          
+
           // Count all attribute values we validated
           if (detail.status !== 'skipped') {
             totalAttributeValues++;
@@ -361,8 +361,8 @@ function testDirectory(dirInfo) {
         }
       }      console.log(`   ${fileElementsValid === xmlElements.length ? '✅' : '❌'} Elements valid: ${fileElementsValid}/${xmlElements.length}`);
       console.log(`   ${fileAttributesValid === fileAttributesTotal ? '✅' : '❌'} Attributes valid: ${fileAttributesValid}/${fileAttributesTotal}`);
-      console.log(`   ${fileAttributeValuesValid === fileAttributeValuesTotal ? '✅' : '❌'} Attribute values valid: ${fileAttributeValuesValid}/${fileAttributeValuesTotal}`);      if (fileElementsValid === xmlElements.length && 
-          fileAttributesValid === fileAttributesTotal && 
+      console.log(`   ${fileAttributeValuesValid === fileAttributeValuesTotal ? '✅' : '❌'} Attribute values valid: ${fileAttributeValuesValid}/${fileAttributeValuesTotal}`);      if (fileElementsValid === xmlElements.length &&
+          fileAttributesValid === fileAttributesTotal &&
           fileAttributeValuesValid === fileAttributeValuesTotal) {
         validFiles++;
       }
