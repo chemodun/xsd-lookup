@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.1.1...xsd-lookup@v1.2.0) (2025-06-24)
+
+
+### Features
+
+* add static validation methods for attribute names and values in XsdReference class ([2fa7f0a](https://github.com/chemodun/xsd-lookup/commit/2fa7f0a1afb8718c6380a6b7ed8de3352034afba))
+
+
+### Documentation
+
+* enhance README with new method descriptions and usage examples ([2fa7f0a](https://github.com/chemodun/xsd-lookup/commit/2fa7f0a1afb8718c6380a6b7ed8de3352034afba))
+
 ## [1.1.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.1.0...xsd-lookup@v1.1.1) (2025-06-24)
 
 ### Code Refactoring
