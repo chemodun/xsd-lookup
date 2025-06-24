@@ -2,7 +2,6 @@
 
 ## [0.2.1](https://github.com/chemodun/xsd-lookup/compare/v0.2.0...v0.2.1) (2025-06-24)
 
-
 ### Bug Fixes
 
 * improve import statements in comprehensive tests ([0c57304](https://github.com/chemodun/xsd-lookup/commit/0c57304c685dc7506e4dc0565832428be52508cb))
