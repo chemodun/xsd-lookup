@@ -2,7 +2,6 @@
 
 ## [1.1.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.1.0...xsd-lookup@v1.1.1) (2025-06-24)
 
-
 ### Code Refactoring
 
 * XsdReference methods to improve return types and hierarchy handling ([397d0e9](https://github.com/chemodun/xsd-lookup/commit/397d0e9a1bb86f3aa030ec99ec7cdb7e181c805a))
