@@ -69,6 +69,7 @@ export class Schema {
   private doc: Document;
   private schemaIndex: SchemaIndex;
   private elementMap: Record<string, ElementMapEntry[]>;
+  private elementContexts: Record<string, ElementContext[]>;
   private cache!: HierarchyCache;
   private metrics!: PerformanceMetrics;
   private maxCacheSize: number = 10000;
@@ -87,6 +88,7 @@ export class Schema {
     // Build indexes
     this.schemaIndex = this.indexSchema(this.doc.documentElement);
     this.elementMap = this.buildElementMap();
+    this.elementContexts = this.schemaIndex.elementContexts;
   }
 
   private initializeCaches(): void {
@@ -193,15 +195,38 @@ export class Schema {
     const attributeGroups: Record<string, Element> = {};
     const types: Record<string, Element> = {};
 
-    const walk = (node: Node): void => {
+    // First, collect only direct children of the schema root (truly global elements)
+    for (let i = 0; i < root.childNodes.length; i++) {
+      const child = root.childNodes[i];
+      if (child.nodeType === 1) {
+        const element = child as Element;
+
+        if (element.nodeName === ns + 'element' && element.getAttribute('name')) {
+          const name = element.getAttribute('name')!;
+          if (!elements[name]) elements[name] = [];
+          elements[name].push(element);
+        }
+        else if (element.nodeName === ns + 'group' && element.getAttribute('name')) {
+          groups[element.getAttribute('name')!] = element;
+        }
+        else if (element.nodeName === ns + 'attributeGroup' && element.getAttribute('name')) {
+          attributeGroups[element.getAttribute('name')!] = element;
+        }
+        else if (element.nodeName === ns + 'complexType' && element.getAttribute('name')) {
+          types[element.getAttribute('name')!] = element;
+        }
+        else if (element.nodeName === ns + 'simpleType' && element.getAttribute('name')) {
+          types[element.getAttribute('name')!] = element;
+        }
+      }
+    }
+
+    // Then walk recursively to collect all types, groups, and attribute groups (which can be nested)
+    const walkForTypesAndGroups = (node: Node): void => {
       if (!node || node.nodeType !== 1) return;
       const element = node as Element;
 
-      if (element.nodeName === ns + 'element' && element.getAttribute('name')) {
-        const name = element.getAttribute('name')!;
-        if (!elements[name]) elements[name] = [];  // Initialize array if needed
-        elements[name].push(element);  // Push to array instead of overwriting
-      }
+      // Only collect types and groups, not nested elements
       if (element.nodeName === ns + 'group' && element.getAttribute('name')) {
         groups[element.getAttribute('name')!] = element;
       }
@@ -214,69 +239,599 @@ export class Schema {
       if (element.nodeName === ns + 'simpleType' && element.getAttribute('name')) {
         types[element.getAttribute('name')!] = element;
       }
+
+      // Recurse into children
       for (let i = 0; i < element.childNodes.length; i++) {
-        walk(element.childNodes[i]);
+        walkForTypesAndGroups(element.childNodes[i]);
       }
     };
 
-    walk(root);
-    return { elements, groups, attributeGroups, types, elementContexts: {} };
-  }  public getElementDefinition(elementName: string, hierarchy: string[] = []): Element[] {
-    // Smart hierarchy resolution: try different hierarchy depths for better matches
-    const hierarchyOptions = [
-      hierarchy.slice(-1),    // Just immediate parent
-      hierarchy.slice(-2),    // Parent + grandparent
-      hierarchy.slice(-3),    // Last 3 levels
-      hierarchy,              // Full hierarchy
-      []                      // No hierarchy (global fallback)
-    ];
+    walkForTypesAndGroups(root);
 
-    for (const hierarchyVariant of hierarchyOptions) {
-      const result = this.getElementDefinitionWithHierarchy(elementName, hierarchyVariant);
-      if (result.length > 0) {
-        return result;
+    // Build comprehensive element contexts including group membership
+    const elementContexts = this.buildElementContexts(elements, groups, types);
+
+    return { elements, groups, attributeGroups, types, elementContexts };
+  }
+
+  /**
+   * Build comprehensive element contexts, including elements reachable through groups
+   */
+  private buildElementContexts(
+    globalElements: Record<string, Element[]>,
+    groups: Record<string, Element>,
+    types: Record<string, Element>
+  ): Record<string, ElementContext[]> {
+    const elementContexts: Record<string, ElementContext[]> = {};
+    const ns = 'xs:';
+
+    // Build type-to-element mapping
+    const typeToElements = this.buildTypeToElementMapping(globalElements, types);
+
+    // First, add all global elements as their own contexts
+    for (const [elementName, elements] of Object.entries(globalElements)) {
+      if (!elementContexts[elementName]) elementContexts[elementName] = [];
+
+      for (const element of elements) {
+        elementContexts[elementName].push({
+          element,
+          groups: [], // Global elements don't belong to groups directly
+          parents: [] // Will be filled in later when we analyze where they can appear
+        });
       }
     }
 
-    return [];
+    // Then, traverse all groups to find elements defined within them
+    for (const [groupName, groupElement] of Object.entries(groups)) {
+      this.extractElementsFromGroup(groupElement, groupName, elementContexts, groups, types, ns);
+    }
+
+    // IMPORTANT: Also traverse all global elements to find inline element definitions
+    // This captures cases like param under params, where param is defined inline
+    // AND handles type references in context (e.g., library element using interrupt_library type)
+    for (const [elementName, elements] of Object.entries(globalElements)) {
+      for (const element of elements) {
+        this.extractInlineElementsFromElement(element, elementName, elementContexts, groups, types, ns, [elementName]);
+      }
+    }
+
+    return elementContexts;
   }
 
-  private getElementDefinitionWithHierarchy(elementName: string, hierarchy: string[]): Element[] {
+  /**
+   * Extract all elements from a group and add them to element contexts
+   */
+  private extractElementsFromGroup(
+    groupElement: Element,
+    groupName: string,
+    elementContexts: Record<string, ElementContext[]>,
+    groups: Record<string, Element>,
+    types: Record<string, Element>,
+    ns: string,
+    visitedGroups: Set<string> = new Set()
+  ): void {
+    // Prevent infinite recursion in group references
+    if (visitedGroups.has(groupName)) return;
+    visitedGroups.add(groupName);
 
-    // Strategy 1: Context-specific lookup - find element within hierarchical context
-    if (hierarchy.length > 0) {
-      const contextDef = this.findElementInHierarchyPath(elementName, hierarchy);
-      if (contextDef) {
-        return [contextDef];
-      }
-    }    // Strategy 2: Direct global element lookup with context filtering
-    if (this.schemaIndex.elements[elementName]) {
-      const allDefs = this.schemaIndex.elements[elementName];
-      return this.selectBestDefinitionByContext(elementName, allDefs, hierarchy);
-    }// Strategy 3: Search in elementMap with parent context preference
-    const defs = this.elementMap[elementName] || [];
-    if (defs.length) {
-      // If hierarchy provided, prefer exact parent match
-      const parentName = hierarchy.length > 0 ? hierarchy[0] : undefined;
-      if (parentName) {
-        const parentDefs = defs.filter(d => d.parent === parentName);
-        if (parentDefs.length) {
-          return parentDefs.map(d => d.node);
+    const extractElements = (node: Element, currentGroups: string[]): void => {
+      if (!node || node.nodeType !== 1) return;
+
+      // If this is an element definition, add it to contexts
+      if (node.nodeName === ns + 'element' && node.getAttribute('name')) {
+        const elementName = node.getAttribute('name')!;
+
+        if (!elementContexts[elementName]) elementContexts[elementName] = [];
+
+        // Check if we already have this exact element in this group context
+        const existingContext = elementContexts[elementName].find(ctx =>
+          ctx.element === node &&
+          JSON.stringify(ctx.groups.sort()) === JSON.stringify(currentGroups.sort())
+        );
+
+        if (!existingContext) {
+          elementContexts[elementName].push({
+            element: node,
+            groups: [...currentGroups],
+            parents: [] // Will be filled in later
+          });
         }
       }
 
-      // If only one definition exists, use it
-      if (defs.length === 1) return defs.map(d => d.node);
+      // If this is a group reference, recursively extract from the referenced group
+      if (node.nodeName === ns + 'group' && node.getAttribute('ref')) {
+        const refGroupName = node.getAttribute('ref')!;
+        const refGroup = groups[refGroupName];
+        if (refGroup && !visitedGroups.has(refGroupName)) {
+          this.extractElementsFromGroup(refGroup, refGroupName, elementContexts, groups, types, ns, new Set(visitedGroups));
+        }
+      }
 
-      // If no parentName or no match, but all parents are null, use them
-      if (defs.every(d => !d.parent)) return defs.map(d => d.node);
+      // Handle type extensions - extract elements from the base type
+      if (node.nodeName === ns + 'extension' && node.getAttribute('base')) {
+        const baseName = node.getAttribute('base')!;
+        const baseType = types[baseName];
+        if (baseType) {
+          // Extract elements from the base type within the current element's context
+          // For group elements, we need to find the parent element
+          let parentElement = node.parentNode;
+          while (parentElement && parentElement.nodeType === 1) {
+            const parentElem = parentElement as Element;
+            if (parentElem.nodeName === ns + 'element') {
+              const parentElementName = parentElem.getAttribute('name');
+              if (parentElementName) {
+                // Extract elements from the base type with the parent element as context
+                this.extractElementsFromType(baseType, baseName, elementContexts, groups, types, ns, new Set(), [parentElementName]);
+              }
+              break;
+            }
+            parentElement = parentElement.parentNode;
+          }
+        }
+      }
 
-      // If we have definitions but no exact match, use the first one as fallback
-      return [defs[0].node];
+      // Recursively process all children
+      for (let i = 0; i < node.childNodes.length; i++) {
+        const child = node.childNodes[i];
+        if (child.nodeType === 1) {
+          extractElements(child as Element, currentGroups);
+        }
+      }
+    };
+
+    // Start extraction with the current group in the context
+    extractElements(groupElement, [groupName]);
+  }
+
+  /**
+   * Extract elements from a group while maintaining parent context information
+   */
+  private extractElementsFromGroupWithParentContext(
+    groupElement: Element,
+    groupName: string,
+    elementContexts: Record<string, ElementContext[]>,
+    groups: Record<string, Element>,
+    types: Record<string, Element>,
+    ns: string,
+    parentContext: string[],
+    visitedGroups: Set<string> = new Set()
+  ): void {
+    // Prevent infinite recursion
+    if (visitedGroups.has(groupName)) return;
+    visitedGroups.add(groupName);
+
+    const extractElements = (node: Element): void => {
+      if (!node || node.nodeType !== 1) return;
+
+      // If this is an element definition, add it to contexts with group and parent info
+      if (node.nodeName === ns + 'element' && node.getAttribute('name')) {
+        const elementName = node.getAttribute('name')!;
+
+        if (!elementContexts[elementName]) elementContexts[elementName] = [];
+
+        // Add context with both group membership and parent information
+        elementContexts[elementName].push({
+          element: node,
+          groups: [groupName],
+          parents: [...parentContext] // Use the passed parent context
+        });
+      }
+
+      // If this is a group reference, recursively extract
+      if (node.nodeName === ns + 'group' && node.getAttribute('ref')) {
+        const refGroupName = node.getAttribute('ref')!;
+        const refGroup = groups[refGroupName];
+        if (refGroup && !visitedGroups.has(refGroupName)) {
+          this.extractElementsFromGroupWithParentContext(refGroup, refGroupName, elementContexts, groups, types, ns, parentContext, new Set(visitedGroups));
+        }
+      }
+
+      // Handle type extensions - extract elements from the base type
+      if (node.nodeName === ns + 'extension' && node.getAttribute('base')) {
+        const baseName = node.getAttribute('base')!;
+        const baseType = types[baseName];
+        if (baseType) {
+          // Extract elements from the base type within the current element's context
+          // For group elements with parent context, we need to find the parent element
+          let parentElement = node.parentNode;
+          while (parentElement && parentElement.nodeType === 1) {
+            const parentElem = parentElement as Element;
+            if (parentElem.nodeName === ns + 'element') {
+              const parentElementName = parentElem.getAttribute('name');
+              if (parentElementName) {
+                // Extract elements from the base type with the parent element as context
+                this.extractElementsFromType(baseType, baseName, elementContexts, groups, types, ns, new Set(), [parentElementName, ...parentContext]);
+              }
+              break;
+            }
+            parentElement = parentElement.parentNode;
+          }
+        }
+      }
+
+      // Recursively process all children
+      for (let i = 0; i < node.childNodes.length; i++) {
+        const child = node.childNodes[i];
+        if (child.nodeType === 1) {
+          extractElements(child as Element);
+        }
+      }
+    };
+
+    extractElements(groupElement);
+  }
+
+  /**
+   * Extract all elements from a complex type and add them to element contexts
+   */
+  private extractElementsFromType(
+    typeElement: Element,
+    typeName: string,
+    elementContexts: Record<string, ElementContext[]>,
+    groups: Record<string, Element>,
+    types: Record<string, Element>,
+    ns: string,
+    visitedTypes: Set<string> = new Set(),
+    parentElementNames: string[] = []
+  ): void {
+    // Prevent infinite recursion in type references
+    if (visitedTypes.has(typeName)) return;
+    visitedTypes.add(typeName);
+
+    // Use the provided parent element names instead of the type name
+    const currentParents = parentElementNames.length > 0 ? parentElementNames : [typeName];
+
+    const extractElements = (node: Element, currentParents: string[]): void => {
+      if (!node || node.nodeType !== 1) return;
+
+      // If this is an element definition, add it to contexts
+      if (node.nodeName === ns + 'element' && node.getAttribute('name')) {
+        const elementName = node.getAttribute('name')!;
+
+        if (!elementContexts[elementName]) elementContexts[elementName] = [];
+
+        // Check if we already have this exact element in this parent context
+        const existingContext = elementContexts[elementName].find(ctx =>
+          ctx.element === node &&
+          JSON.stringify(ctx.parents.sort()) === JSON.stringify(currentParents.sort())
+        );
+
+        if (!existingContext) {
+          elementContexts[elementName].push({
+            element: node,
+            groups: [], // Will be filled if this element is found through group references
+            parents: [...currentParents]
+          });
+
+          // Check if this element also has a type reference - if so, extract elements from that type
+          const typeAttr = node.getAttribute('type');
+          if (typeAttr && types[typeAttr] && !visitedTypes.has(typeAttr)) {
+            // Extract elements from the referenced type with this element as parent
+            this.extractElementsFromType(types[typeAttr], typeAttr, elementContexts, groups, types, ns, new Set(), [elementName, ...currentParents]);
+          }
+        }
+      }
+
+      // If this is a group reference, extract elements from the group and mark with group membership
+      if (node.nodeName === ns + 'group' && node.getAttribute('ref')) {
+        const refGroupName = node.getAttribute('ref')!;
+        const refGroup = groups[refGroupName];
+        if (refGroup) {
+          // Extract elements from the group and mark them with group membership
+          // Only pass the immediate parent element, not the full chain
+          const immediateParent = currentParents.length > 0 ? [currentParents[0]] : [];
+          this.extractElementsFromGroupWithParentContext(refGroup, refGroupName, elementContexts, groups, types, ns, immediateParent);
+        }
+      }
+
+      // Handle type extensions - extract elements from the base type
+      if (node.nodeName === ns + 'extension' && node.getAttribute('base')) {
+        const baseName = node.getAttribute('base')!;
+        const baseType = types[baseName];
+        if (baseType && !visitedTypes.has(baseName)) {
+          // Extract elements from the base type with the same parent context
+          this.extractElementsFromType(baseType, baseName, elementContexts, groups, types, ns, new Set([...visitedTypes, baseName]), currentParents);
+        }
+      }
+
+      // Recursively process all children
+      for (let i = 0; i < node.childNodes.length; i++) {
+        const child = node.childNodes[i];
+        if (child.nodeType === 1) {
+          extractElements(child as Element, currentParents);
+        }
+      }
+    };
+
+    // Start extraction with the current parent element names
+    extractElements(typeElement, currentParents);
+  }
+
+  /**
+   * Extract inline elements from a global element definition
+   * This captures elements like param under params that are defined inline
+   */
+  private extractInlineElementsFromElement(
+    parentElement: Element,
+    parentElementName: string,
+    elementContexts: Record<string, ElementContext[]>,
+    groups: Record<string, Element>,
+    types: Record<string, Element>,
+    ns: string,
+    initialParents: string[] = []
+  ): void {
+    const extractInlineElements = (node: Element, currentParents: string[], isRootElement: boolean = false): void => {
+      if (!node || node.nodeType !== 1) return;
+
+      // If this is an inline element definition, add it to contexts
+      if (node.nodeName === ns + 'element' && node.getAttribute('name')) {
+        const elementName = node.getAttribute('name')!;
+
+        if (!elementContexts[elementName]) elementContexts[elementName] = [];
+
+        // Only add to contexts if this is not the root element we started with
+        if (!isRootElement) {
+          // Add this inline element with its parent context
+          elementContexts[elementName].push({
+            element: node,
+            groups: [], // Inline elements don't belong to groups directly
+            parents: [...currentParents]
+          });
+        }
+
+        // IMPORTANT: When we find an element, it becomes a potential parent for nested elements
+        // Continue recursion with this element added to the parent chain
+        // BUT: Don't add the root element to its own parent chain
+        const newParents = isRootElement ? currentParents : [elementName, ...currentParents];
+
+        // Check if this element has a type reference - if so, extract elements from that type
+        const typeAttr = node.getAttribute('type');
+        if (typeAttr && types[typeAttr]) {
+          // Extract elements from the referenced type with this element as parent
+          this.extractElementsFromType(types[typeAttr], typeAttr, elementContexts, groups, types, ns, new Set(), [elementName]);
+        }
+
+        for (let i = 0; i < node.childNodes.length; i++) {
+          const child = node.childNodes[i];
+          if (child.nodeType === 1) {
+            extractInlineElements(child as Element, newParents, false);
+          }
+        }
+        return; // Don't process children again with the old parent chain
+      }
+
+      // If this is a group reference, extract elements from the group
+      if (node.nodeName === ns + 'group' && node.getAttribute('ref')) {
+        const refGroupName = node.getAttribute('ref')!;
+        const refGroup = groups[refGroupName];
+        if (refGroup) {
+          this.extractElementsFromGroupWithParentContext(refGroup, refGroupName, elementContexts, groups, types, ns, currentParents);
+        }
+      }
+
+      // Handle type extensions - extract elements from the base type
+      if (node.nodeName === ns + 'extension' && node.getAttribute('base')) {
+        const baseName = node.getAttribute('base')!;
+        const baseType = types[baseName];
+        if (baseType) {
+          // Extract elements from the base type with the same parent context
+          this.extractElementsFromType(baseType, baseName, elementContexts, groups, types, ns, new Set(), currentParents);
+        }
+      }
+
+      // Recursively process all children with the same parent context
+      for (let i = 0; i < node.childNodes.length; i++) {
+        const child = node.childNodes[i];
+        if (child.nodeType === 1) {
+          extractInlineElements(child as Element, currentParents, false);
+        }
+      }
+    };
+
+    // Start extraction with the initial parents as context, marking the root element
+    extractInlineElements(parentElement, initialParents, true);
+  }
+
+  public getElementDefinition(elementName: string, hierarchy: string[] = []): Element | undefined {
+    // Step 1: If no hierarchy provided, only return global elements
+    if (hierarchy.length === 0) {
+      // Look for global elements (direct children of schema root)
+      const globalElements = this.getGlobalElementDefinitions(elementName);
+      return globalElements.length > 0 ? globalElements[0] : undefined;
     }
 
+    // Step 2: INCREMENTAL HIERARCHY APPROACH
+    // hierarchy = [immediate_parent, grandparent, great_grandparent, ...]
+    // Try each level incrementally: bottom-up expansion, then top-down search
+
+    for (let level = 1; level <= hierarchy.length; level++) {
+      // Take the first 'level' elements from hierarchy (bottom-up expansion)
+      const currentHierarchy = hierarchy.slice(0, level);
+
+      // Reverse for top-down search: [great_grandparent, ..., grandparent, immediate_parent]
+      const topDownHierarchy = [...currentHierarchy].reverse();
+
+      // Try to find element with this hierarchy level using top-down search
+      const foundElement = this.findElementTopDown(elementName, topDownHierarchy);
+
+      if (foundElement) {
+        // Found a definition at this level - check if it's unique enough
+        // For now, return the first match (we can add uniqueness checking later)
+        return foundElement;
+      }
+    }
+
+    // No definition found at any hierarchy level
+    return undefined;
+  }
+
+  /**
+   * Check if an element context can appear in the given parent within the hierarchy
+   */
+  private canElementAppearInParent(context: ElementContext, parentName: string, hierarchy: string[]): boolean {
+    // If the context has explicit parent information, use it
+    if (context.parents.length > 0) {
+      return context.parents.includes(parentName);
+    }
+
+    // If the context belongs to groups, check if those groups can appear in the parent
+    if (context.groups.length > 0) {
+      for (const groupName of context.groups) {
+        if (this.canGroupAppearInParent(groupName, parentName)) {
+          return true;
+        }
+      }
+    }
+
+    // If no specific parent/group information, this might be a global element
+    // that can appear anywhere - we'll need to check via the old method as fallback
+    return this.canElementAppearInParentViaSearch(context.element, parentName);
+  }
+
+  /**
+   * Check if a group can appear in a given parent element
+   */
+  private canGroupAppearInParent(groupName: string, parentName: string): boolean {
+    // Get the parent element/type definitions
+    const parentDefs = this.getGlobalElementOrTypeDefs(parentName);
+
+    for (const parentDef of parentDefs) {
+      if (this.doesDefinitionReferenceGroup(parentDef, groupName)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Check if a definition (element or type) references a specific group
+   */
+  private doesDefinitionReferenceGroup(definition: Element, groupName: string): boolean {
+    const ns = 'xs:';
+    const visited = new Set<string>();
+
+    const searchForGroupRef = (node: Element): boolean => {
+      if (!node || node.nodeType !== 1) return false;
+
+      const nodeKey = `${node.nodeName}:${node.getAttribute('name') || node.getAttribute('ref') || 'anon'}`;
+      if (visited.has(nodeKey)) return false;
+      visited.add(nodeKey);
+
+      // Check if this is a direct group reference to our target group
+      if (node.nodeName === ns + 'group' && node.getAttribute('ref') === groupName) {
+        return true;
+      }
+
+      // Handle type references
+      if (node.nodeName === ns + 'element') {
+        const typeName = node.getAttribute('type');
+        if (typeName && this.schemaIndex.types[typeName]) {
+          if (searchForGroupRef(this.schemaIndex.types[typeName])) {
+            return true;
+          }
+        }
+      }
+
+      // Recursively search children
+      for (let i = 0; i < node.childNodes.length; i++) {
+        const child = node.childNodes[i];
+        if (child.nodeType === 1) {
+          if (searchForGroupRef(child as Element)) {
+            return true;
+          }
+        }
+      }
+
+      return false;
+    };
+
+    return searchForGroupRef(definition);
+  }
+
+  /**
+   * Fallback method to check if an element can appear in a parent via dynamic search
+   */
+  private canElementAppearInParentViaSearch(elementNode: Element, parentName: string): boolean {
+    const parentDefs = this.getGlobalElementOrTypeDefs(parentName);
+
+    for (const parentDef of parentDefs) {
+      const foundElements = this.findElementsInDefinition(parentDef, elementNode.getAttribute('name') || '');
+      if (foundElements.some(found => found === elementNode)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Select the best context match from multiple matching contexts
+   */
+  private selectBestContextMatch(contexts: ElementContext[], hierarchy: string[]): Element {
+    if (contexts.length === 1) {
+      return contexts[0].element;
+    }
+
+    // Score each context based on how well it matches the hierarchy
+    const scoredContexts = contexts.map(ctx => {
+      let score = 0;
+
+      // HIGHEST PRIORITY: Prefer contexts with fewer parents (more specific)
+      // A context with Parents=[order] is more specific than Parents=[params, aiscript]
+      // This should be the dominant factor - use much higher weights
+      score += (100 - ctx.parents.length) * 10; // Much higher weight for specificity
+
+      // SECOND PRIORITY: Prefer contexts whose parents appear earlier in hierarchy (more specific)
+      // In hierarchy [library, interrupts, aiscript], "library" at index 0 is more specific than "interrupts" at index 1
+      for (const parent of ctx.parents) {
+        const hierarchyIndex = hierarchy.indexOf(parent);
+        if (hierarchyIndex !== -1) {
+          // Give higher score to parents that appear earlier in hierarchy (more specific/closer to element)
+          score += (hierarchy.length - hierarchyIndex) * 10; // Lower index = more specific
+        }
+      }
+
+      // THIRD PRIORITY: Prefer contexts that have exact parent matches in the hierarchy
+      for (let i = 0; i < hierarchy.length && i < ctx.parents.length; i++) {
+        if (ctx.parents[i] === hierarchy[i]) {
+          score += 5; // Reduced weight for exact match
+        }
+      }
+
+      // FOURTH PRIORITY: General bonus for parents that appear in the hierarchy
+      for (const parent of ctx.parents) {
+        if (hierarchy.includes(parent)) {
+          score += 2; // Reduced weight for general bonus
+        }
+      }
+
+      // Add small bonus for having parent information at all
+      score += ctx.parents.length * 0.1; // Very small bonus
+
+      // Add small bonus for group membership
+      score += ctx.groups.length * 0.1; // Very small bonus
+
+      return { context: ctx, score };
+    });
+
+    // Sort by score (highest first)
+    scoredContexts.sort((a, b) => b.score - a.score);
+
+    return scoredContexts[0].context.element;
+  }
+
+  private getGlobalElementDefinitions(elementName: string): Element[] {
+    // Only return truly global elements (direct children of schema root)
+    if (this.schemaIndex.elements[elementName]) {
+      return this.schemaIndex.elements[elementName];
+    }
+
+    // Do NOT fall back to elementMap as it contains nested elements too
     return [];
-  }  private findElementInHierarchyPath(elementName: string, hierarchy: string[]): Element | null {
+  }
+
+  private findElementInHierarchyPath(elementName: string, hierarchy: string[]): Element | null {
     if (hierarchy.length === 0) return null;
 
     // Create cache key
@@ -362,9 +917,7 @@ export class Schema {
         const parentDefs = this.findElementsInDefinition(grandparentDef, parentName!);
         for (const parentDef of parentDefs) {
           const elementDef = this.findElementsInDefinition(parentDef, elementName);
-          if (elementDef.length > 0) {
-            contextCandidates.push(...elementDef);
-          }
+          if (elementDef.length > 0) contextCandidates.push(...elementDef);
         }
       }
     }
@@ -374,9 +927,7 @@ export class Schema {
       const parentDefs = this.getGlobalElementOrTypeDefs(parentName);
       for (const parentDef of parentDefs) {
         const elementDefs = this.findElementsInDefinition(parentDef, elementName);
-        if (elementDefs.length > 0) {
-          contextCandidates.push(...elementDefs);
-        }
+        if (elementDefs.length > 0) contextCandidates.push(...elementDefs);
       }
     }
 
@@ -396,7 +947,9 @@ export class Schema {
       defs.push(this.schemaIndex.types[name]);
     }
 
-    // Check elementMap for additional definitions
+    // For hierarchical search, we also need to include elements from elementMap
+    // but ONLY when this method is called from hierarchical search context
+    // The elementMap contains elements that may be reachable through hierarchy
     const mapDefs = this.elementMap[name] || [];
     defs.push(...mapDefs.map(d => d.node));
 
@@ -429,7 +982,7 @@ export class Schema {
     }
 
     // Search recursively through the type definition with optimizations
-    const visited = new Set<string>();
+    const visited = new Set<Element>();
 
     const searchInNode = (node: Element, depth: number = 0): void => {
       if (!node || node.nodeType !== 1) return;
@@ -440,13 +993,10 @@ export class Schema {
       // Depth limit for performance - prevent excessive recursion
       if (depth > 20) return;
 
-      // Create a more specific key that includes the search context to avoid false positive cycles
-      const nodeId = node.getAttribute('name') || node.getAttribute('ref') || 'anonymous';
-      const key = `${node.nodeName}:${nodeId}:${elementName}:${depth}`;
-
-      // Only skip if we've seen this exact same search context before
-      if (visited.has(key)) return;
-      visited.add(key);
+      // Use the actual DOM node reference for cycle detection to avoid false positives
+      // This ensures we only skip when we encounter the exact same node again
+      if (visited.has(node)) return;
+      visited.add(node);
 
       // Check if this is the element we're looking for
       if (node.nodeName === ns + 'element' && node.getAttribute('name') === elementName) {
@@ -522,22 +1072,29 @@ export class Schema {
 
     return results;
   }  public getElementAttributes(elementName: string, hierarchy: string[] = []): AttributeInfo[] {
-    // Smart hierarchy resolution: try different hierarchy depths for better attribute matches
-    const hierarchyOptions = [
-      hierarchy.slice(-1),    // Just immediate parent (often best for attributes)
-      hierarchy.slice(-2),    // Parent + grandparent
-      hierarchy.slice(-3),    // Last 3 levels
-      hierarchy,              // Full hierarchy
-      []                      // No hierarchy (global fallback)
-    ];
+    // STRICT HIERARCHY RULE: If hierarchy provided, only search in hierarchy context
+    // Never fall back to global elements when hierarchy is specified
 
-    for (const hierarchyVariant of hierarchyOptions) {
-      const result = this.getElementAttributesWithHierarchy(elementName, hierarchyVariant);
-      if (result.length > 0) {
-        return result;
-      }
+    // If no hierarchy provided, only search global elements
+    if (hierarchy.length === 0) {
+      return this.getElementAttributesWithHierarchy(elementName, []);
     }
 
+    // Step 1: Use progressive hierarchy search to find attributes
+    // Stop as soon as we find any attributes at any depth
+    // for (let contextDepth = 1; contextDepth <= hierarchy.length; contextDepth++) {
+    //   // Take the first contextDepth elements (immediate context)
+    //   const currentContext = hierarchy.slice(0, contextDepth);
+
+      // const contextAttrs = this.getElementAttributesWithHierarchy(elementName, currentContext);
+      const contextAttrs = this.getElementAttributesWithHierarchy(elementName, hierarchy);
+      if (contextAttrs.length > 0) {
+        // Found attributes at this depth - return them immediately
+        return contextAttrs;
+      }
+    // }
+
+    // No attributes found at any depth - do NOT fall back to global search
     return [];
   }
 
@@ -558,8 +1115,8 @@ export class Schema {
     const attributes: Record<string, Element> = {};
 
     // Get the correct element definition based on hierarchical context
-    const defs = this.getElementDefinition(elementName, hierarchy);
-    if (defs.length === 0) {
+    const def = this.getElementDefinition(elementName, hierarchy);
+    if (!def) {
       // Cache empty result
       const emptyResult: AttributeInfo[] = [];
       this.cache.attributeCache.set(cacheKey, emptyResult);
@@ -567,8 +1124,8 @@ export class Schema {
       return emptyResult;
     }
 
-    // Use the first (most specific) definition
-    const bestDef = defs[0];
+    // Use the definition
+    const bestDef = def;
 
     // Collect attributes from the element definition
     this.collectAttrs(bestDef, attributes);
@@ -763,16 +1320,54 @@ export class Schema {
    * Compare two element definitions to see if they are equivalent
    */
   private areElementDefinitionsEquivalent(def1: Element, def2: Element): boolean {
-    // Compare by attribute groups first
+    // First check if they are the exact same node
+    if (def1 === def2) {
+      return true;
+    }
+
+    // Compare element name
+    const name1 = def1.getAttribute('name');
+    const name2 = def2.getAttribute('name');
+    if (name1 !== name2) {
+      return false;
+    }
+
+    // Compare type attribute
+    const type1 = def1.getAttribute('type');
+    const type2 = def2.getAttribute('type');
+    if (type1 !== type2) {
+      return false;
+    }
+
+    // Compare by attribute groups
     const attrGroup1 = this.getElementAttributeGroup(def1);
     const attrGroup2 = this.getElementAttributeGroup(def2);
 
     if (attrGroup1 && attrGroup2) {
-      return attrGroup1 === attrGroup2;
+      if (attrGroup1 !== attrGroup2) {
+        return false;
+      }
+    } else if (attrGroup1 !== attrGroup2) {
+      // One has attribute group, the other doesn't
+      return false;
     }
 
-    // If no attribute groups, compare by node identity (same definition)
-    return def1 === def2;
+    // Compare other key attributes that might make them different
+    const minOccurs1 = def1.getAttribute('minOccurs');
+    const minOccurs2 = def2.getAttribute('minOccurs');
+    if (minOccurs1 !== minOccurs2) {
+      return false;
+    }
+
+    const maxOccurs1 = def1.getAttribute('maxOccurs');
+    const maxOccurs2 = def2.getAttribute('maxOccurs');
+    if (maxOccurs1 !== maxOccurs2) {
+      return false;
+    }
+
+    // If we have the same name, type, attribute groups, and occurrence constraints,
+    // consider them equivalent
+    return true;
   }  /**
    * Extract the primary attribute group reference from an element definition
    */
@@ -992,53 +1587,53 @@ export class Schema {
             if (memberTypeName) {
               // Recursively get validation info for each member type
               const memberInfo = this.getTypeValidationInfo(memberTypeName);
-              
+
               // Merge patterns (union means ANY pattern can match)
               if (memberInfo.patterns) {
                 if (!validationInfo.patterns) validationInfo.patterns = [];
                 validationInfo.patterns.push(...memberInfo.patterns);
               }
-              
+
               // Merge enumerations (union means ANY enum value is valid)
               if (memberInfo.enumValues) {
                 if (!validationInfo.enumValues) validationInfo.enumValues = [];
                 validationInfo.enumValues.push(...memberInfo.enumValues);
               }
-              
+
               // For numeric restrictions, use the most permissive ranges
               if (memberInfo.minInclusive !== undefined) {
-                validationInfo.minInclusive = validationInfo.minInclusive !== undefined 
+                validationInfo.minInclusive = validationInfo.minInclusive !== undefined
                   ? Math.min(validationInfo.minInclusive, memberInfo.minInclusive)
                   : memberInfo.minInclusive;
               }
-              
+
               if (memberInfo.maxInclusive !== undefined) {
-                validationInfo.maxInclusive = validationInfo.maxInclusive !== undefined 
+                validationInfo.maxInclusive = validationInfo.maxInclusive !== undefined
                   ? Math.max(validationInfo.maxInclusive, memberInfo.maxInclusive)
                   : memberInfo.maxInclusive;
               }
-              
+
               if (memberInfo.minExclusive !== undefined) {
-                validationInfo.minExclusive = validationInfo.minExclusive !== undefined 
+                validationInfo.minExclusive = validationInfo.minExclusive !== undefined
                   ? Math.min(validationInfo.minExclusive, memberInfo.minExclusive)
                   : memberInfo.minExclusive;
               }
-              
+
               if (memberInfo.maxExclusive !== undefined) {
-                validationInfo.maxExclusive = validationInfo.maxExclusive !== undefined 
+                validationInfo.maxExclusive = validationInfo.maxExclusive !== undefined
                   ? Math.max(validationInfo.maxExclusive, memberInfo.maxExclusive)
                   : memberInfo.maxExclusive;
               }
-              
+
               // For length restrictions, use the most permissive ranges
               if (memberInfo.minLength !== undefined) {
-                validationInfo.minLength = validationInfo.minLength !== undefined 
+                validationInfo.minLength = validationInfo.minLength !== undefined
                   ? Math.min(validationInfo.minLength, memberInfo.minLength)
                   : memberInfo.minLength;
               }
-              
+
               if (memberInfo.maxLength !== undefined) {
-                validationInfo.maxLength = validationInfo.maxLength !== undefined 
+                validationInfo.maxLength = validationInfo.maxLength !== undefined
                   ? Math.max(validationInfo.maxLength, memberInfo.maxLength)
                   : memberInfo.maxLength;
               }
@@ -1090,13 +1685,13 @@ export class Schema {
   private normalizeAttributeValue(value: string): string {
     // Replace all types of line breaks with spaces
     let normalized = value.replace(/\r\n|\r|\n/g, ' ');
-    
+
     // Replace multiple consecutive spaces with single spaces
     normalized = normalized.replace(/\s+/g, ' ');
-    
+
     // Trim leading and trailing whitespace
     normalized = normalized.trim();
-    
+
     return normalized;
   }
 
@@ -1106,14 +1701,14 @@ export class Schema {
   private validateValueWithRestrictions(value: string, attrInfo: AttributeInfo): AttributeValidationResult {
     // Normalize the value for validation (join multi-line content)
     const normalizedValue = this.normalizeAttributeValue(value);
-    
+
     const restrictions: string[] = [];
     let isValid = true;
     let errorMessage: string | undefined;
 
     // For union types, we need to check if the value matches ANY of the validation rules
     // Priority: enumerations first (more specific), then patterns (more general)
-    
+
     // 1. Check enumeration validation first (highest priority for union types)
     if (attrInfo.enumValues && attrInfo.enumValues.length > 0) {
       const enumValidationPassed = attrInfo.enumValues.includes(normalizedValue);
@@ -1130,7 +1725,7 @@ export class Schema {
     }    // 2. If enum validation failed or no enums present, check pattern validation
     if (attrInfo.patterns && attrInfo.patterns.length > 0) {
       const validPatterns: string[] = [];
-      
+
       for (const pattern of attrInfo.patterns) {
         try {
           // Anchor the pattern to match the entire string (if not already anchored)
@@ -1141,7 +1736,7 @@ export class Schema {
           if (!pattern.endsWith('$')) {
             fullPattern = fullPattern + '$';
           }
-          
+
           const regex = new RegExp(fullPattern);
           validPatterns.push(pattern);
           if (regex.test(normalizedValue)) {
@@ -1157,7 +1752,7 @@ export class Schema {
           restrictions.push(`Pattern validation skipped (invalid regex: ${pattern})`);
         }
       }
-      
+
       // If we reach here, neither enums nor patterns matched
       if (attrInfo.enumValues && attrInfo.enumValues.length > 0) {
         // We have both enums and patterns, but neither matched
@@ -1182,7 +1777,7 @@ export class Schema {
     }
 
     // 3. If we have enums but no patterns, and enum validation failed, return error
-    if (attrInfo.enumValues && attrInfo.enumValues.length > 0 && 
+    if (attrInfo.enumValues && attrInfo.enumValues.length > 0 &&
         (!attrInfo.patterns || attrInfo.patterns.length === 0)) {
       const displayValue = value === normalizedValue ? value : `${value} (normalized: ${normalizedValue})`;
       return {
@@ -1355,25 +1950,25 @@ export class Schema {
       if (memberTypes) {
         // Split memberTypes by whitespace to get individual type names
         const typeNames = memberTypes.trim().split(/\s+/);
-        
+
         // For union types, we need to determine the most appropriate built-in type
         // Priority: if any member is numeric, prefer numeric; otherwise default to string
         for (const memberTypeName of typeNames) {
           if (memberTypeName) {
             const resolvedMemberType = this.resolveToBuiltinType(memberTypeName);
-            
+
             // If we find a numeric type, use it (numeric types are more restrictive)
             if (this.isBuiltinNumericType(resolvedMemberType)) {
               return resolvedMemberType;
             }
-            
+
             // If we find a boolean type, use it
             if (resolvedMemberType === 'xs:boolean') {
               return resolvedMemberType;
             }
           }
         }
-        
+
         // If no specific type found, default to string (most permissive)
         return 'xs:string';
       }
@@ -1479,5 +2074,191 @@ export class Schema {
         // The specific validation rules should be handled by patterns/enums
         return { isValid: true, expectedType: originalType };
     }
+  }
+
+  /**
+   * Check if multiple element definitions are equivalent and return one if they are
+   * @param elements Array of element definitions to compare
+   * @returns Single element if all are equivalent, undefined if they differ
+   */
+  private getUniqueElementIfEquivalent(elements: Element[]): Element | undefined {
+    if (elements.length <= 1) {
+      return elements[0];
+    }
+
+    // Use the first element as the reference for comparison
+    const referenceElement = elements[0];
+
+    // Check if all elements are equivalent to the reference
+    for (let i = 1; i < elements.length; i++) {
+      if (!this.areElementDefinitionsEquivalent(referenceElement, elements[i])) {
+        // Found a non-equivalent element, so they're not all the same
+        return undefined;
+      }
+    }
+
+    // All elements are equivalent, return the first one
+    return referenceElement;
+  }
+
+  /**
+   * Build a mapping from type names to element names that use those types
+   */
+  private buildTypeToElementMapping(
+    globalElements: Record<string, Element[]>,
+    types: Record<string, Element>
+  ): Record<string, string[]> {
+    const typeToElements: Record<string, string[]> = {};
+    const ns = 'xs:';
+
+    // Scan all global elements to find which types they use
+    for (const [elementName, elements] of Object.entries(globalElements)) {
+      for (const element of elements) {
+        const typeAttr = element.getAttribute('type');
+        if (typeAttr) {
+          if (!typeToElements[typeAttr]) typeToElements[typeAttr] = [];
+          if (!typeToElements[typeAttr].includes(elementName)) {
+            typeToElements[typeAttr].push(elementName);
+          }
+        }
+
+        // Also scan inline elements within this global element
+        this.scanElementForInlineTypeReferences(element, typeToElements, ns);
+      }
+    }
+
+    // Also scan type definitions for nested type references
+    for (const [typeName, typeElement] of Object.entries(types)) {
+      this.scanTypeForTypeReferences(typeElement, typeName, typeToElements, ns);
+    }
+
+    return typeToElements;
+  }
+
+  /**
+   * Recursively scan a type element for type references
+   */
+  private scanTypeForTypeReferences(
+    node: Element,
+    parentContext: string,
+    typeToElements: Record<string, string[]>,
+    ns: string
+  ): void {
+    if (!node || node.nodeType !== 1) return;
+
+    // Look for elements with type attributes
+    if (node.nodeName === ns + 'element') {
+      const typeAttr = node.getAttribute('type');
+      if (typeAttr) {
+        if (!typeToElements[typeAttr]) typeToElements[typeAttr] = [];
+        if (!typeToElements[typeAttr].includes(parentContext)) {
+          typeToElements[typeAttr].push(parentContext);
+        }
+      }
+    }
+
+    // Look for extension/restriction base attributes
+    if ((node.nodeName === ns + 'extension' || node.nodeName === ns + 'restriction')) {
+      const baseAttr = node.getAttribute('base');
+      if (baseAttr) {
+        if (!typeToElements[baseAttr]) typeToElements[baseAttr] = [];
+        if (!typeToElements[baseAttr].includes(parentContext)) {
+          typeToElements[baseAttr].push(parentContext);
+        }
+      }
+    }
+
+    // Recursively scan children
+    for (let i = 0; i < node.childNodes.length; i++) {
+      const child = node.childNodes[i];
+      if (child.nodeType === 1) {
+        this.scanTypeForTypeReferences(child as Element, parentContext, typeToElements, ns);
+      }
+    }
+  }
+
+  /**
+   * Recursively scan an element for inline elements that have type references
+   */
+  private scanElementForInlineTypeReferences(
+    element: Element,
+    typeToElements: Record<string, string[]>,
+    ns: string
+  ): void {
+    if (!element || element.nodeType !== 1) return;
+
+    // Look for inline element definitions
+    for (let i = 0; i < element.childNodes.length; i++) {
+      const child = element.childNodes[i];
+      if (child.nodeType === 1) {
+        const childElement = child as Element;
+
+        // If this is an inline element with a type attribute
+        if (childElement.nodeName === ns + 'element') {
+          const elementName = childElement.getAttribute('name');
+          const typeAttr = childElement.getAttribute('type');
+
+          if (elementName && typeAttr) {
+            if (!typeToElements[typeAttr]) typeToElements[typeAttr] = [];
+            if (!typeToElements[typeAttr].includes(elementName)) {
+              typeToElements[typeAttr].push(elementName);
+            }
+          }
+        }
+
+        // Recursively scan child elements
+        this.scanElementForInlineTypeReferences(childElement, typeToElements, ns);
+      }
+    }
+  }
+
+  /**
+   * Find element using top-down hierarchy search
+   * @param elementName The element to find
+   * @param topDownHierarchy Hierarchy from root to immediate parent [root, ..., immediate_parent]
+   * @returns Element definition if found, undefined otherwise
+   */
+  private findElementTopDown(elementName: string, topDownHierarchy: string[]): Element | undefined {
+    if (topDownHierarchy.length === 0) {
+      // No hierarchy - look for global elements
+      const globalElements = this.getGlobalElementDefinitions(elementName);
+      return globalElements.length > 0 ? globalElements[0] : undefined;
+    }
+
+    // Start from root and walk down the hierarchy
+    const rootElementName = topDownHierarchy[0];
+    let currentDefs = this.getGlobalElementOrTypeDefs(rootElementName);
+
+    if (currentDefs.length === 0) {
+      return undefined;
+    }
+
+    // Walk down through each level of the hierarchy
+    for (let level = 1; level < topDownHierarchy.length; level++) {
+      const nextElementName = topDownHierarchy[level];
+      const nextLevelDefs: Element[] = [];
+
+      // Search for the next element in all current definitions
+      for (const currentDef of currentDefs) {
+        const found = this.findElementsInDefinition(currentDef, nextElementName);
+        nextLevelDefs.push(...found);
+      }
+
+      if (nextLevelDefs.length === 0) {
+        return undefined; // Path broken - element not found at this level
+      }
+
+      currentDefs = nextLevelDefs;
+    }
+
+    // Now search for the target element in the final parent definitions
+    const targetElements: Element[] = [];
+    for (const parentDef of currentDefs) {
+      const found = this.findElementsInDefinition(parentDef, elementName);
+      targetElements.push(...found);
+    }
+
+    // Return the first found element (could add uniqueness logic here later)
+    return targetElements.length > 0 ? targetElements[0] : undefined;
   }
 }

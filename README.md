@@ -49,6 +49,33 @@ console.log(result.isValid); // true/false
 
 ## 📖 API Reference
 
+### 🏗️ Hierarchy Parameter Usage
+
+**Important**: All methods that accept a `hierarchy` parameter expect it in **bottom-up order** (from immediate parent to root element).
+
+#### Hierarchy Examples
+
+```typescript
+// For XML structure:
+// <aiscripts>
+//   <actions>
+//     <do_if value="condition">
+//       <debug_text text="message" />
+//     </do_if>
+//   </actions>
+// </aiscripts>
+
+// For 'do_if' element:
+const doIfHierarchy = ['actions', 'aiscripts'];
+
+// For 'debug_text' element:
+const debugTextHierarchy = ['do_if', 'actions', 'aiscripts'];
+
+// Usage:
+const attributes = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', doIfHierarchy);
+const validation = xsdRef.validateAttributeValue('aiscripts', 'debug_text', 'text', 'Hello', debugTextHierarchy);
+```
+
 ### XsdReference Class
 
 The main entry point for schema operations.
@@ -79,8 +106,12 @@ Get all attributes for an element with complete type information including:
 - Pattern restrictions
 - Numeric/length constraints
 
+**Important**: The `hierarchy` parameter should be provided in **bottom-up order** (from immediate parent to root element).
+
 ```typescript
-const attributes = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if');
+// For element structure: <aiscripts><actions><do_if>
+// Hierarchy for 'do_if' element should be: ['actions', 'aiscripts']
+const attributes = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'aiscripts']);
 // Returns:
 // [{
 //   name: 'value',
@@ -95,8 +126,12 @@ const attributes = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if');
 
 Validate an attribute value against XSD constraints.
 
+**Important**: The `hierarchy` parameter should be provided in **bottom-up order** (from immediate parent to root element).
+
 ```typescript
-const result = xsdRef.validateAttributeValue('aiscripts', 'debug_text', 'chance', '50');
+// For element structure: <aiscripts><actions><debug_text>
+// Hierarchy for 'debug_text' element should be: ['actions', 'aiscripts']
+const result = xsdRef.validateAttributeValue('aiscripts', 'debug_text', 'chance', '50', ['actions', 'aiscripts']);
 // Returns:
 // {
 //   isValid: true,
@@ -115,13 +150,19 @@ Provides detailed validation capabilities for a specific XSD schema.
 
 Find element definitions considering hierarchy context.
 
+**Important**: The `hierarchy` parameter should be provided in **bottom-up order** (from immediate parent to root element).
+
 ##### `getElementAttributes(elementName: string, hierarchy?: string[])`
 
 Get basic attribute information for an element.
 
+**Important**: The `hierarchy` parameter should be provided in **bottom-up order** (from immediate parent to root element).
+
 ##### `validateAttributeValue(elementName: string, attributeName: string, value: string, hierarchy?: string[])`
 
 Validate an attribute value with detailed error reporting.
+
+**Important**: The `hierarchy` parameter should be provided in **bottom-up order** (from immediate parent to root element).
 
 ### XsdDetector Class
 
@@ -224,7 +265,7 @@ XsdReference
 ### Validation Flow
 
 1. **Schema Detection**: Auto-detect or specify XSD schema
-2. **Element Resolution**: Find element definition in schema hierarchy
+2. **Element Resolution**: Find element definition in schema hierarchy (using bottom-up hierarchy order)
 3. **Attribute Lookup**: Get attribute definitions with type information
 4. **Type Resolution**: Follow type inheritance and union types
 5. **Value Validation**: Apply all XSD constraints (patterns, enums, ranges)
@@ -347,8 +388,9 @@ if (attr.enumValues?.length > 0) {
   console.log('Valid values:', attr.enumValues);
 }
 
-// Validate with detailed error info
-const result = schema.validateAttributeValue('element', 'attr', 'value');
+// Validate with detailed error info (remember: hierarchy in bottom-up order)
+const hierarchy = ['actions', 'aiscripts']; // parent -> root
+const result = schema.validateAttributeValue('do_if', 'value', 'condition', hierarchy);
 if (!result.isValid) {
   console.error('Validation failed:', result.errorMessage);
   if (result.allowedValues) {
@@ -356,12 +398,14 @@ if (!result.isValid) {
   }
 }
 
-// Get all validation constraints
-const attrs = schema.getElementAttributesWithTypes('do_if');
+// Get all validation constraints (remember: hierarchy in bottom-up order)
+const attrs = schema.getElementAttributesWithTypes('do_if', ['actions', 'aiscripts']);
 attrs.forEach(attr => {
   console.log(`${attr.name}: ${attr.type}`);
   console.log(`  Required: ${attr.required}`);
   console.log(`  Patterns: ${attr.patterns?.length || 0}`);
+  console.log(`  Enums: ${attr.enumValues?.length || 0}`);
+});
   console.log(`  Enums: ${attr.enumValues?.length || 0}`);
 });
 ```

@@ -108,46 +108,59 @@ export class XsdReference {
       console.warn(`Could not read XSD directory ${this.xsdDirectory}:`, error);
       return [];
     }
-  }  /**
+  }
+  /**
    * Get element definition using a specific schema by name
+   * @param schemaName The schema to use
+   * @param elementName The element name to find
+   * @param hierarchy The element hierarchy in bottom-up order (parent → root)
    */
-  public getElementDefinition(schemaName: string, elementName: string, hierarchy: string[] = []): Element[] {
+  public getElementDefinition(schemaName: string, elementName: string, hierarchy: string[] = []): Element | undefined {
     const schema = this.loadSchema(schemaName);
     if (!schema) {
-      return [];
+      return undefined;
     }
 
     return schema.getElementDefinition(elementName, hierarchy);
-  }
-  /**
+  }  /**
    * Get element attributes using a specific schema by name
+   * @param schemaName The schema to use
+   * @param elementName The element name to find
+   * @param hierarchy The element hierarchy in bottom-up order (parent → root)
    */
   public getElementAttributes(schemaName: string, elementName: string, hierarchy: string[] = []): { name: string; node: Element }[] {
     const schema = this.loadSchema(schemaName);
     if (!schema) {
       return [];
-    }    return schema.getElementAttributes(elementName, hierarchy);
-  }
+    }
 
-  /**
+    return schema.getElementAttributes(elementName, hierarchy);
+  }  /**
    * Get element attributes with type information
-   */
-  public getElementAttributesWithTypes(schemaName: string, elementName: string, hierarchy: string[] = []): any[] {
+   * @param schemaName The schema to use
+   * @param elementName The element name to find
+   * @param hierarchy The element hierarchy in bottom-up order (parent → root)
+   */  public getElementAttributesWithTypes(schemaName: string, elementName: string, hierarchy: string[] = []): any[] {
     const schema = this.loadSchema(schemaName);
     if (!schema) {
       return [];
     }
-    return schema.getElementAttributesWithTypes(elementName, hierarchy);
-  }
 
-  /**
+    return schema.getElementAttributesWithTypes(elementName, hierarchy);
+  }/**
    * Validate an attribute value against the schema
+   * @param schemaName The schema to use
+   * @param elementName The element name
+   * @param attributeName The attribute name
+   * @param attributeValue The attribute value to validate
+   * @param hierarchy The element hierarchy in bottom-up order (parent → root)
    */
   public validateAttributeValue(schemaName: string, elementName: string, attributeName: string, attributeValue: string, hierarchy: string[] = []): any {
     const schema = this.loadSchema(schemaName);
     if (!schema) {
       return { isValid: false, errorMessage: 'Schema not found' };
     }
+
     return schema.validateAttributeValue(elementName, attributeName, attributeValue, hierarchy);
   }
 

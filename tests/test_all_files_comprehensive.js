@@ -1,5 +1,5 @@
-const { XsdReference } = require('../dist/XsdReference') || require('./dist/XsdReference.js');
-const { XsdDetector } = require('../dist/XsdDetector') || require('./dist/XsdDetector.js');
+const { XsdReference } = require('../dist/XsdReference');
+const { XsdDetector } = require('../dist/XsdDetector');
 const fs = require('fs');
 const path = require('path');
 const { DOMParser } = require('xmldom');
@@ -104,21 +104,19 @@ function validateElement(schemaName, elementInfo, filePath) {
     invalidAttributes: [],
     invalidAttributeValues: [],
     attributeValidationDetails: []
-  };
+  };  // Convert top-down hierarchy (from XML parsing) to bottom-up hierarchy (expected by XsdReference)
+  const bottomUpHierarchy = [...hierarchy].reverse();
 
-  // Use the full hierarchy for validation
-  const elementDefs = xsdRef.getElementDefinition(schemaName, name, hierarchy);
-  results.elementValid = elementDefs.length > 0;
-
+  // Use the bottom-up hierarchy for validation
+  const elementDef = xsdRef.getElementDefinition(schemaName, name, bottomUpHierarchy);
+  results.elementValid = elementDef !== undefined;
   if (!results.elementValid) {
     console.error(`❌ VALIDATION FAILED: Element '${name}' not found in schema`);
-    console.error(`   Hierarchy: [${hierarchy.join(' > ')}]`);
+    console.error(`   Hierarchy: [${bottomUpHierarchy.join(' > ')}]`);
     console.error(`   File: ${filePath}`);
     process.exit(1); // Fail immediately
-  }
-
-  // Get comprehensive attribute information including validation rules
-  const schemaAttributes = xsdRef.getElementAttributesWithTypes(schemaName, name, hierarchy);
+  }// Get comprehensive attribute information including validation rules
+  const schemaAttributes = xsdRef.getElementAttributesWithTypes(schemaName, name, bottomUpHierarchy);
   const validAttributeNames = schemaAttributes.map(attr => attr.name);
 
   // Filter out XML namespace attributes (these are XML infrastructure, not schema-defined)
@@ -152,7 +150,7 @@ function validateElement(schemaName, elementInfo, filePath) {
         status: 'valid'
       };      // Validate attribute value (all defined attributes should be validated)
       const value = (attributeValues && attributeValues[attr] !== undefined) ? attributeValues[attr] : '';
-      const valueValidation = xsdRef.validateAttributeValue(schemaName, name, attr, value, hierarchy);
+      const valueValidation = xsdRef.validateAttributeValue(schemaName, name, attr, value, bottomUpHierarchy);
 
       validationDetail.value = value || '(empty)';
       validationDetail.valueValid = valueValidation.isValid;
@@ -169,10 +167,9 @@ function validateElement(schemaName, elementInfo, filePath) {
           patterns: attrInfo?.patterns,
           enumValues: attrInfo?.enumValues
         });
-
-        // FAIL IMMEDIATELY on invalid attribute values with enhanced error info
+          // FAIL IMMEDIATELY on invalid attribute values with enhanced error info
         console.error(`❌ ATTRIBUTE VALUE VALIDATION FAILED: Element '${name}' attribute '${attr}' has invalid value '${value}'`);
-        console.error(`   Hierarchy: [${hierarchy.join(' > ')}]`);
+        console.error(`   Hierarchy: [${bottomUpHierarchy.join(' > ')}]`);
         console.error(`   Attribute type: ${attrInfo?.type || 'unknown'}`);
         console.error(`   Error: ${valueValidation.errorMessage}`);
 
@@ -210,10 +207,9 @@ function validateElement(schemaName, elementInfo, filePath) {
         value: attributeValues?.[attr],
         error: 'Attribute not defined in schema'
       });
-
-      // FAIL IMMEDIATELY on invalid attributes with enhanced error info
+        // FAIL IMMEDIATELY on invalid attributes with enhanced error info
       console.error(`❌ ATTRIBUTE VALIDATION FAILED: Element '${name}' has invalid attribute '${attr}'`);
-      console.error(`   Hierarchy: [${hierarchy.join(' > ')}]`);
+      console.error(`   Hierarchy: [${bottomUpHierarchy.join(' > ')}]`);
       console.error(`   Valid attributes: ${validAttributeNames.join(', ')}`);
       console.error(`   All element attributes: ${attributes.join(', ')}`);
       console.error(`   Attribute value: '${attributeValues?.[attr] || ''}'`);
