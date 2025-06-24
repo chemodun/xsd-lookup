@@ -115,9 +115,8 @@ function validateElement(schemaName, elementInfo, filePath) {
     console.error(`   Hierarchy: [${bottomUpHierarchy.join(' > ')}]`);
     console.error(`   File: ${filePath}`);
     process.exit(1); // Fail immediately
-  }// Get comprehensive attribute information including validation rules
+  }  // Get comprehensive attribute information including validation rules
   const schemaAttributes = xsdRef.getElementAttributesWithTypes(schemaName, name, bottomUpHierarchy);
-  const validAttributeNames = schemaAttributes.map(attr => attr.name);
 
   // Filter out XML namespace attributes (these are XML infrastructure, not schema-defined)
   const isXmlNamespaceAttribute = (attrName) => {
@@ -126,37 +125,81 @@ function validateElement(schemaName, elementInfo, filePath) {
            attrName === 'xmlns';
   };
 
-  // Validate each attribute existence and value with detailed reporting
+  // Filter provided attributes to exclude XML namespace attributes
+  const providedNonXmlAttrs = attributes.filter(attr => !isXmlNamespaceAttribute(attr));
+
+  // Use the static method to validate attribute names
+  const nameValidation = XsdReference.validateAttributeNames(schemaAttributes, providedNonXmlAttrs);
+
+  // Handle XML namespace attributes separately (mark as valid but skipped)
   for (const attr of attributes) {
     if (isXmlNamespaceAttribute(attr)) {
-      // Skip XML namespace attributes - they're infrastructure, not schema-defined
       results.validAttributes.push(attr);
       results.attributeValidationDetails.push({
         name: attr,
         status: 'skipped',
         reason: 'XML namespace attribute'
       });
-    } else if (validAttributeNames.includes(attr)) {
+    }
+  }
+
+  // Handle wrong attributes (attributes not in schema)
+  if (nameValidation.wrongAttributes.length > 0) {
+    results.invalidAttributes.push(...nameValidation.wrongAttributes);
+
+    for (const attr of nameValidation.wrongAttributes) {
+      results.attributeValidationDetails.push({
+        name: attr,
+        status: 'invalid_attribute',
+        value: attributeValues?.[attr],
+        error: 'Attribute not defined in schema'
+      });
+
+      // FAIL IMMEDIATELY on invalid attributes
+      console.error(`❌ ATTRIBUTE VALIDATION FAILED: Element '${name}' has invalid attribute '${attr}'`);
+      console.error(`   Hierarchy: [${bottomUpHierarchy.join(' > ')}]`);
+      console.error(`   Valid attributes: ${schemaAttributes.map(a => a.name).join(', ')}`);
+      console.error(`   All element attributes: ${attributes.join(', ')}`);
+      console.error(`   Attribute value: '${attributeValues?.[attr] || ''}'`);
+      console.error(`   File: ${filePath}`);
+      process.exit(1); // Fail immediately
+    }
+  }
+
+  // Handle missing required attributes
+  if (nameValidation.missingRequiredAttributes.length > 0) {
+    for (const attr of nameValidation.missingRequiredAttributes) {
+      console.error(`❌ REQUIRED ATTRIBUTE MISSING: Element '${name}' is missing required attribute '${attr}'`);
+      console.error(`   Hierarchy: [${bottomUpHierarchy.join(' > ')}]`);
+      console.error(`   File: ${filePath}`);
+      process.exit(1); // Fail immediately
+    }
+  }
+
+  // Process valid attributes and validate their values
+  for (const attr of providedNonXmlAttrs) {
+    if (!nameValidation.wrongAttributes.includes(attr)) {
       results.validAttributes.push(attr);
 
-      // Get detailed attribute info for enhanced validation
+      // Get detailed attribute info
       const attrInfo = schemaAttributes.find(a => a.name === attr);
+      const value = (attributeValues && attributeValues[attr] !== undefined) ? attributeValues[attr] : '';
+
+      // Use the static method to validate attribute value against rules
+      const valueValidation = XsdReference.validateAttributeValueAgainstRules(schemaAttributes, attr, value);
+
       const validationDetail = {
         name: attr,
         type: attrInfo?.type || 'unknown',
         required: attrInfo?.required || false,
         patterns: attrInfo?.patterns || [],
         enumValues: attrInfo?.enumValues || [],
-        status: 'valid'
-      };      // Validate attribute value (all defined attributes should be validated)
-      const value = (attributeValues && attributeValues[attr] !== undefined) ? attributeValues[attr] : '';
-      const valueValidation = xsdRef.validateAttributeValue(schemaName, name, attr, value, bottomUpHierarchy);
-
-      validationDetail.value = value || '(empty)';
-      validationDetail.valueValid = valueValidation.isValid;
+        value: value || '(empty)',
+        valueValid: valueValidation.isValid,
+        status: valueValidation.isValid ? 'valid_value' : 'invalid_value'
+      };
 
       if (!valueValidation.isValid) {
-        validationDetail.status = 'invalid_value';
         validationDetail.error = valueValidation.errorMessage;
 
         results.invalidAttributeValues.push({
@@ -167,54 +210,25 @@ function validateElement(schemaName, elementInfo, filePath) {
           patterns: attrInfo?.patterns,
           enumValues: attrInfo?.enumValues
         });
-          // FAIL IMMEDIATELY on invalid attribute values with enhanced error info
+
+        // FAIL IMMEDIATELY on invalid attribute values with enhanced error info
         console.error(`❌ ATTRIBUTE VALUE VALIDATION FAILED: Element '${name}' attribute '${attr}' has invalid value '${value}'`);
         console.error(`   Hierarchy: [${bottomUpHierarchy.join(' > ')}]`);
         console.error(`   Attribute type: ${attrInfo?.type || 'unknown'}`);
         console.error(`   Error: ${valueValidation.errorMessage}`);
 
-        if (attrInfo?.enumValues && attrInfo.enumValues.length > 0) {
-          console.error(`   Allowed values: ${attrInfo.enumValues.join(', ')}`);
-        }
-
-        if (attrInfo?.patterns && attrInfo.patterns.length > 0) {
-          console.error(`   Required pattern(s):`);
-          attrInfo.patterns.forEach((pattern, index) => {
-            console.error(`     Pattern ${index + 1}: ${pattern}`);
+        if (valueValidation.violatedRules) {
+          console.error(`   Violated rules:`);
+          valueValidation.violatedRules.forEach((rule, index) => {
+            console.error(`     ${index + 1}. ${rule}`);
           });
-        }
-
-        if (attrInfo?.minLength !== undefined || attrInfo?.maxLength !== undefined) {
-          console.error(`   Length constraints: min=${attrInfo.minLength || 'none'}, max=${attrInfo.maxLength || 'none'}`);
-        }
-        if (attrInfo?.minInclusive !== undefined || attrInfo?.maxInclusive !== undefined) {
-          console.error(`   Numeric range: min=${attrInfo.minInclusive || 'none'}, max=${attrInfo.maxInclusive || 'none'}`);
         }
 
         console.error(`   File: ${filePath}`);
         process.exit(1); // Fail immediately
-      } else {
-        validationDetail.status = 'valid_value';
       }
 
       results.attributeValidationDetails.push(validationDetail);
-    } else {
-      results.invalidAttributes.push(attr);
-
-      results.attributeValidationDetails.push({
-        name: attr,
-        status: 'invalid_attribute',
-        value: attributeValues?.[attr],
-        error: 'Attribute not defined in schema'
-      });
-        // FAIL IMMEDIATELY on invalid attributes with enhanced error info
-      console.error(`❌ ATTRIBUTE VALIDATION FAILED: Element '${name}' has invalid attribute '${attr}'`);
-      console.error(`   Hierarchy: [${bottomUpHierarchy.join(' > ')}]`);
-      console.error(`   Valid attributes: ${validAttributeNames.join(', ')}`);
-      console.error(`   All element attributes: ${attributes.join(', ')}`);
-      console.error(`   Attribute value: '${attributeValues?.[attr] || ''}'`);
-      console.error(`   File: ${filePath}`);
-      process.exit(1); // Fail immediately
     }
   }
 

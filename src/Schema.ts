@@ -937,21 +937,37 @@ export class Schema {
 
   private getGlobalElementOrTypeDefs(name: string): Element[] {
     const defs: Element[] = [];
-      // Check global elements
+    const seenNodes = new Set<Element>();
+
+    // Check global elements
     if (this.schemaIndex.elements[name]) {
-      defs.push(...this.schemaIndex.elements[name]);  // Spread the array
+      for (const element of this.schemaIndex.elements[name]) {
+        if (!seenNodes.has(element)) {
+          defs.push(element);
+          seenNodes.add(element);
+        }
+      }
     }
 
     // Check global types
     if (this.schemaIndex.types[name]) {
-      defs.push(this.schemaIndex.types[name]);
+      const typeElement = this.schemaIndex.types[name];
+      if (!seenNodes.has(typeElement)) {
+        defs.push(typeElement);
+        seenNodes.add(typeElement);
+      }
     }
 
     // For hierarchical search, we also need to include elements from elementMap
     // but ONLY when this method is called from hierarchical search context
     // The elementMap contains elements that may be reachable through hierarchy
     const mapDefs = this.elementMap[name] || [];
-    defs.push(...mapDefs.map(d => d.node));
+    for (const mapDef of mapDefs) {
+      if (!seenNodes.has(mapDef.node)) {
+        defs.push(mapDef.node);
+        seenNodes.add(mapDef.node);
+      }
+    }
 
     return defs;
   }  private findElementsInDefinition(parentDef: Element, elementName: string): Element[] {
@@ -2229,7 +2245,7 @@ export class Schema {
     const rootElementName = topDownHierarchy[0];
     let currentDefs = this.getGlobalElementOrTypeDefs(rootElementName);
 
-    if (currentDefs.length === 0) {
+    if (currentDefs.length !== 1) {
       return undefined;
     }
 

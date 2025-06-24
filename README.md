@@ -140,6 +140,108 @@ const result = xsdRef.validateAttributeValue('aiscripts', 'debug_text', 'chance'
 // }
 ```
 
+##### `getElementDefinition(schemaName: string, elementName: string, hierarchy?: string[]): Element | undefined`
+
+Get the element definition for a specific element in a schema, considering hierarchy context.
+
+**Important**: The `hierarchy` parameter should be provided in **bottom-up order** (from immediate parent to root element).
+
+```typescript
+// For element structure: <aiscripts><actions><do_if>
+// Hierarchy for 'do_if' element should be: ['actions', 'aiscripts']
+const elementDef = xsdRef.getElementDefinition('aiscripts', 'do_if', ['actions', 'aiscripts']);
+// Returns: Element definition object or undefined if not found
+```
+
+#### Static Methods
+
+##### `XsdReference.validateAttributeNames(attributeInfos: any[], providedAttributes: string[])`
+
+Validate attribute names against schema definitions. This static method checks which attributes are valid and identifies missing required attributes.
+
+```typescript
+// Get attribute info first
+const attributeInfos = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'aiscripts']);
+const providedAttrs = ['value', 'chance', 'invalid_attr'];
+
+const nameValidation = XsdReference.validateAttributeNames(attributeInfos, providedAttrs);
+// Returns:
+// {
+//   wrongAttributes: ['invalid_attr'],           // Attributes not in schema
+//   missingRequiredAttributes: []                // Required attributes missing
+// }
+```
+
+##### `XsdReference.validateAttributeValueAgainstRules(attributeInfos: any[], attributeName: string, attributeValue: string)`
+
+Validate an attribute value against all XSD rules (patterns, enumerations, ranges, etc.). This static method provides detailed validation with rule violation information.
+
+```typescript
+// Get attribute info first
+const attributeInfos = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'aiscripts']);
+
+const valueValidation = XsdReference.validateAttributeValueAgainstRules(
+  attributeInfos,
+  'value',
+  'player.money gt 1000'
+);
+// Returns:
+// {
+//   isValid: true,
+//   errorMessage: undefined,        // Only present if invalid
+//   violatedRules: undefined        // Only present if invalid - array of specific rule violations
+// }
+
+// Example with invalid value:
+const invalidValidation = XsdReference.validateAttributeValueAgainstRules(
+  attributeInfos,
+  'chance',
+  '150'
+);
+// Returns:
+// {
+//   isValid: false,
+//   errorMessage: "Value must be <= 100",
+//   violatedRules: ["Value must be <= 100"]
+// }
+```
+
+#### Benefits of Static Methods
+
+The static methods provide several advantages for validation workflows:
+
+- **🔄 Reusable**: Can be called without creating XsdReference instances
+- **⚡ Performance**: Skip schema loading when you already have attribute info
+- **🎯 Granular**: Separate validation of names vs. values for better error handling
+- **📋 Detailed**: Provide specific rule violation information for debugging
+- **🧪 Testable**: Easy to unit test with mock attribute info data
+
+#### Typical Validation Workflow
+
+```typescript
+// 1. Get schema and attribute info once
+const xsdRef = new XsdReference('./tests/data/xsd');
+const attributeInfos = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'aiscripts']);
+
+// 2. Validate attribute names (fast, no schema lookup needed)
+const nameValidation = XsdReference.validateAttributeNames(attributeInfos, ['value', 'invalid_attr']);
+if (nameValidation.wrongAttributes.length > 0) {
+  console.error('Invalid attributes:', nameValidation.wrongAttributes);
+}
+
+// 3. Validate attribute values (fast, no schema lookup needed)
+for (const attrName of validAttributes) {
+  const valueValidation = XsdReference.validateAttributeValueAgainstRules(
+    attributeInfos,
+    attrName,
+    attributeValue
+  );
+  if (!valueValidation.isValid) {
+    console.error(`Invalid value for ${attrName}:`, valueValidation.violatedRules);
+  }
+}
+```
+
 ### Schema Class
 
 Provides detailed validation capabilities for a specific XSD schema.
@@ -280,7 +382,7 @@ XsdReference
 
 ### Benchmark Results
 
-- **2,134 elements** validated successfully  
+- **2,134 elements** validated successfully
 - **3,389 attributes** with values validated
 - **100% success rate** on real X4 XML files
 - **3,018 pattern validations** passed
