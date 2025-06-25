@@ -73,7 +73,7 @@ jobs:
         with:
           check_name: "Test Results on Release (${{ github.event_name }})"
           files: "test-results/**/*.xml"
-          comment_mode: "off"
+          comment_mode: "always"
 
       -
         name: Check URL
