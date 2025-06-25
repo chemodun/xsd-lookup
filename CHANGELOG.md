@@ -2,7 +2,6 @@
 
 ## [1.2.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.2.0...xsd-lookup@v1.2.1) (2025-06-25)
 
-
 ### Code Refactoring
 
 * Added new caching mechanism for element definitions in Schema to optimize lookups. ([557ea38](https://github.com/chemodun/xsd-lookup/commit/557ea381f20dd601a727b232a02da344ca424cac))
@@ -12,7 +11,6 @@
 * Refactored XsdReference to support EnhancedAttributeInfo and added methods for validating attribute names and filtering attributes. ([557ea38](https://github.com/chemodun/xsd-lookup/commit/557ea381f20dd601a727b232a02da344ca424cac))
 * Updated comprehensive tests to reflect changes in attribute validation and filtering logic. ([557ea38](https://github.com/chemodun/xsd-lookup/commit/557ea381f20dd601a727b232a02da344ca424cac))
 * Updated methods in Schema to utilize the new EnhancedAttributeInfo, including getElementAttributesWithTypes and validateValueWithRestrictions. ([557ea38](https://github.com/chemodun/xsd-lookup/commit/557ea381f20dd601a727b232a02da344ca424cac))
-
 
 ### Miscellaneous Chores
 
