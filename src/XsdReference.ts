@@ -1,7 +1,18 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Schema } from './Schema';
+import { Schema, AttributeInfo, EnhancedAttributeInfo, AttributeValidationResult } from './Schema';
 import { XsdDetector } from './XsdDetector';
+
+// Re-export interfaces from Schema for public API
+export type { AttributeInfo, EnhancedAttributeInfo, AttributeValidationResult };
+
+/**
+ * Interface for attribute name validation results
+ */
+export interface AttributeNameValidationResult {
+  wrongAttributes: string[];
+  missingRequiredAttributes: string[];
+}
 
 export class XsdReference {
   private schemas: Map<string, Schema> = new Map();
@@ -128,7 +139,7 @@ export class XsdReference {
    * @param elementName The element name to find
    * @param hierarchy The element hierarchy in bottom-up order (parent → root)
    */
-  public getElementAttributes(schemaName: string, elementName: string, hierarchy: string[] = []): { name: string; node: Element }[] {
+  public getElementAttributes(schemaName: string, elementName: string, hierarchy: string[] = []): AttributeInfo[] {
     const schema = this.loadSchema(schemaName);
     if (!schema) {
       return [];
@@ -140,14 +151,15 @@ export class XsdReference {
    * @param schemaName The schema to use
    * @param elementName The element name to find
    * @param hierarchy The element hierarchy in bottom-up order (parent → root)
-   */  public getElementAttributesWithTypes(schemaName: string, elementName: string, hierarchy: string[] = []): any[] {
+   */
+  public getElementAttributesWithTypes(schemaName: string, elementName: string, hierarchy: string[] = []): EnhancedAttributeInfo[] {
     const schema = this.loadSchema(schemaName);
     if (!schema) {
       return [];
     }
 
     return schema.getElementAttributesWithTypes(elementName, hierarchy);
-  }/**
+  }  /**
    * Validate an attribute value against the schema
    * @param schemaName The schema to use
    * @param elementName The element name
@@ -155,7 +167,7 @@ export class XsdReference {
    * @param attributeValue The attribute value to validate
    * @param hierarchy The element hierarchy in bottom-up order (parent → root)
    */
-  public validateAttributeValue(schemaName: string, elementName: string, attributeName: string, attributeValue: string, hierarchy: string[] = []): any {
+  public validateAttributeValue(schemaName: string, elementName: string, attributeName: string, attributeValue: string, hierarchy: string[] = []): AttributeValidationResult {
     const schema = this.loadSchema(schemaName);
     if (!schema) {
       return { isValid: false, errorMessage: 'Schema not found' };
@@ -222,9 +234,12 @@ export class XsdReference {
    * @returns Object containing wrong attributes and missing required attributes
    */
   public static validateAttributeNames(
-    attributeInfos: any[],
+    attributeInfos: EnhancedAttributeInfo[],
     providedAttributes: string[]
-  ): { wrongAttributes: string[]; missingRequiredAttributes: string[] } {
+  ): AttributeNameValidationResult {
+    // Filter out XML infrastructure attributes from provided attributes
+    const filteredProvidedAttributes = this.filterOutInfrastructureAttributes(providedAttributes);
+
     // Get all valid attribute names from schema
     const validAttributeNames = new Set(attributeInfos.map(attr => attr.name));
 
@@ -234,10 +249,10 @@ export class XsdReference {
     );
 
     // Find wrong attributes (provided but not in schema)
-    const wrongAttributes = providedAttributes.filter(attr => !validAttributeNames.has(attr));
+    const wrongAttributes = filteredProvidedAttributes.filter(attr => !validAttributeNames.has(attr));
 
     // Find missing required attributes (required in schema but not provided)
-    const providedAttributeSet = new Set(providedAttributes);
+    const providedAttributeSet = new Set(filteredProvidedAttributes);
     const missingRequiredAttributes = Array.from(requiredAttributeNames)
       .filter(attr => !providedAttributeSet.has(attr));
 
@@ -254,12 +269,12 @@ export class XsdReference {
    * @returns Array of attributes that match the specified type
    */
   public static filterAttributesByType(
-    attributeInfos: any[],
+    attributeInfos: EnhancedAttributeInfo[],
     attributeType: string
-  ): { name: string; node: Element }[] {
+  ): string[] {
     return attributeInfos
-      .filter(attr => attr.type === attributeType)
-      .map(attr => ({ name: attr.name, node: attr.node }));
+      .filter(attr => attr.type === attributeType && !this.isXmlInfrastructureAttribute(attr.name))
+      .map(attr => attr.name);
   }
 
   /**
@@ -269,11 +284,16 @@ export class XsdReference {
    * @returns Array of attributes that have the specified restriction type
    */
   public static filterAttributesByRestriction(
-    attributeInfos: any[],
+    attributeInfos: EnhancedAttributeInfo[],
     restrictionType: 'enumeration' | 'pattern' | 'length' | 'range'
-  ): { name: string; node: Element; restriction: any }[] {
+  ): string[] {
     return attributeInfos
       .filter(attr => {
+        // Skip infrastructure attributes
+        if (this.isXmlInfrastructureAttribute(attr.name)) {
+          return false;
+        }
+
         switch (restrictionType) {
           case 'enumeration':
             return attr.enumValues && attr.enumValues.length > 0;
@@ -288,38 +308,7 @@ export class XsdReference {
             return false;
         }
       })
-      .map(attr => {
-        let restriction: any = {};
-
-        switch (restrictionType) {
-          case 'enumeration':
-            restriction = { enumValues: attr.enumValues };
-            break;
-          case 'pattern':
-            restriction = { patterns: attr.patterns };
-            break;
-          case 'length':
-            restriction = {
-              minLength: attr.minLength,
-              maxLength: attr.maxLength
-            };
-            break;
-          case 'range':
-            restriction = {
-              minInclusive: attr.minInclusive,
-              maxInclusive: attr.maxInclusive,
-              minExclusive: attr.minExclusive,
-              maxExclusive: attr.maxExclusive
-            };
-            break;
-        }
-
-        return {
-          name: attr.name,
-          node: attr.node,
-          restriction
-        };
-      });
+      .map(attr => attr.name);
   }
 
   /**
@@ -330,10 +319,18 @@ export class XsdReference {
    * @returns Validation result with details
    */
   public static validateAttributeValueAgainstRules(
-    attributeInfos: any[],
+    attributeInfos: EnhancedAttributeInfo[],
     attributeName: string,
     attributeValue: string
   ): { isValid: boolean; errorMessage?: string; violatedRules?: string[] } {
+    // Return empty/skip result for XML infrastructure attributes
+    if (this.isXmlInfrastructureAttribute(attributeName)) {
+      return {
+        isValid: true, // Infrastructure attributes are always considered valid but ignored
+        errorMessage: undefined
+      };
+    }
+
     const attribute = attributeInfos.find(attr => attr.name === attributeName);
 
     if (!attribute) {
@@ -413,19 +410,32 @@ export class XsdReference {
    * Get possible values for an attribute if it has enumeration restrictions
    * @param attributeInfos The attribute info array from getElementAttributesWithTypes
    * @param attributeName The attribute name
-   * @returns Array of possible values or empty array if no enumeration exists
+   * @returns Map where key is the enum value and value is its annotation text, or empty map if no enumeration exists
    */
   public static getAttributePossibleValues(
-    attributeInfos: any[],
+    attributeInfos: EnhancedAttributeInfo[],
     attributeName: string
-  ): string[] {
+  ): Map<string, string> {
+    // Return empty map for XML infrastructure attributes
+    if (this.isXmlInfrastructureAttribute(attributeName)) {
+      return new Map();
+    }
+
     const attribute = attributeInfos.find(attr => attr.name === attributeName);
 
     if (!attribute || !attribute.enumValues) {
-      return [];
+      return new Map();
     }
 
-    return [...attribute.enumValues]; // Return a copy to prevent modification
+    const result = new Map<string, string>();
+
+    // Build map with enum values and their annotations
+    for (const enumValue of attribute.enumValues) {
+      const annotation = attribute.enumValuesAnnotations?.get(enumValue) || '';
+      result.set(enumValue, annotation);
+    }
+
+    return result;
   }
 
   /**
@@ -475,5 +485,23 @@ export class XsdReference {
     return results;
   }
 
+  /**
+   * Check if an attribute name is an XML infrastructure attribute that should be ignored
+   * @param attributeName The attribute name to check
+   * @returns True if it's an infrastructure attribute (xmlns, xsi, etc.)
+   */
+  private static isXmlInfrastructureAttribute(attributeName: string): boolean {
+    return attributeName.startsWith('xmlns:') ||
+           attributeName.startsWith('xsi:') ||
+           attributeName === 'xmlns';
+  }
 
+  /**
+   * Filter out XML infrastructure attributes from a list
+   * @param attributeNames Array of attribute names to filter
+   * @returns Array with infrastructure attributes removed
+   */
+  private static filterOutInfrastructureAttributes(attributeNames: string[]): string[] {
+    return attributeNames.filter(attr => !this.isXmlInfrastructureAttribute(attr));
+  }
 }

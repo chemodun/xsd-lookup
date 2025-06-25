@@ -118,30 +118,8 @@ function validateElement(schemaName, elementInfo, filePath) {
   }  // Get comprehensive attribute information including validation rules
   const schemaAttributes = xsdRef.getElementAttributesWithTypes(schemaName, name, bottomUpHierarchy);
 
-  // Filter out XML namespace attributes (these are XML infrastructure, not schema-defined)
-  const isXmlNamespaceAttribute = (attrName) => {
-    return attrName.startsWith('xmlns:') ||
-           attrName.startsWith('xsi:') ||
-           attrName === 'xmlns';
-  };
-
-  // Filter provided attributes to exclude XML namespace attributes
-  const providedNonXmlAttrs = attributes.filter(attr => !isXmlNamespaceAttribute(attr));
-
   // Use the static method to validate attribute names
-  const nameValidation = XsdReference.validateAttributeNames(schemaAttributes, providedNonXmlAttrs);
-
-  // Handle XML namespace attributes separately (mark as valid but skipped)
-  for (const attr of attributes) {
-    if (isXmlNamespaceAttribute(attr)) {
-      results.validAttributes.push(attr);
-      results.attributeValidationDetails.push({
-        name: attr,
-        status: 'skipped',
-        reason: 'XML namespace attribute'
-      });
-    }
-  }
+  const nameValidation = XsdReference.validateAttributeNames(schemaAttributes, attributes);
 
   // Handle wrong attributes (attributes not in schema)
   if (nameValidation.wrongAttributes.length > 0) {
@@ -177,7 +155,7 @@ function validateElement(schemaName, elementInfo, filePath) {
   }
 
   // Process valid attributes and validate their values
-  for (const attr of providedNonXmlAttrs) {
+  for (const attr of attributes) {
     if (!nameValidation.wrongAttributes.includes(attr)) {
       results.validAttributes.push(attr);
 

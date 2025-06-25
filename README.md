@@ -6,7 +6,20 @@ A comprehensive TypeScript-based validation system for X4 Foundations modding to
 
 - **🔍 XSD-Based Validation**: Pure XSD schema validation without hardcoded logic
 - **📊 Comprehensive Attribute Validation**: Validates attribute existence, types, and values
+- **🔧 Infrastructure Attribute Filtering**: Automatically ignores XML namespace attributes (`xmlns`, `xmlns:*`, `xsi:*`)
 - **🔗 Type Inheritance Support**: Handles complex XSD type hierarchies and restrictions
+- **🔀 Union Type Processing**: Merges validation rules from multiple member types
+- **📝 Pattern Validation**: Strict regex pattern matching with proper anchoring
+- **📋 Enumeration Support**: Complete enumeration value extraction and validation with annotations
+- **📏 Range Validation**: Numeric and length constraint validation
+- **🗂️ Multi-line Normalization**: Handles multi-line XML attribute values correctly
+- **📈 Performance Optimized**: Caching and indexing for fast validation
+- **🧪 Extensive Testing**: Comprehensive test suite with 100% validation success
+
+- **🔍 XSD-Based Validation**: Pure XSD schema validation without hardcoded logic
+- **📊 Comprehensive Attribute Validation**: Validates attribute existence, types, and values
+- **� Infrastructure Attribute Filtering**: Automatically ignores XML namespace attributes (`xmlns`, `xmlns:*`, `xsi:*`)
+- **�🔗 Type Inheritance Support**: Handles complex XSD type hierarchies and restrictions
 - **🔀 Union Type Processing**: Merges validation rules from multiple member types
 - **📝 Pattern Validation**: Strict regex pattern matching with proper anchoring
 - **📋 Enumeration Support**: Complete enumeration value extraction and validation
@@ -28,7 +41,7 @@ npm run build
 
 ```typescript
 // ES6 imports (from TypeScript/modern JavaScript)
-import { XsdReference } from './dist/XsdReference';
+import { XsdReference, AttributeInfo, EnhancedAttributeInfo, AttributeValidationResult } from './dist/XsdReference';
 import { XsdDetector } from './dist/XsdDetector';
 
 // CommonJS require (from Node.js)
@@ -43,8 +56,51 @@ const schemaName = XsdDetector.getSchemaName('./my-script.xml');
 const schema = xsdRef.getSchema(schemaName);
 
 // Validate an attribute value
-const result = schema.validateAttributeValue('do_if', 'value', 'player.money gt 1000');
+const result: AttributeValidationResult = schema.validateAttributeValue('do_if', 'value', 'player.money gt 1000');
 console.log(result.isValid); // true/false
+```
+
+## 🔧 TypeScript Interface Exports
+
+The package exports several TypeScript interfaces for better type safety:
+
+```typescript
+// Core attribute information interface
+interface AttributeInfo {
+  name: string;
+  node: Element;
+}
+
+// Enhanced attribute information with validation rules
+interface EnhancedAttributeInfo {
+  name: string;
+  type: string;
+  required: boolean;
+  patterns?: string[];
+  enumValues?: string[];
+  enumValuesAnnotations?: Map<string, string>;
+  minLength?: number;
+  maxLength?: number;
+  minInclusive?: number;
+  maxInclusive?: number;
+  minExclusive?: number;
+  maxExclusive?: number;
+}
+
+// Attribute validation result
+interface AttributeValidationResult {
+  isValid: boolean;
+  errorMessage?: string;
+  expectedType?: string;
+  restrictions?: string[];
+  allowedValues?: string[];
+}
+
+// Attribute name validation result
+interface AttributeNameValidationResult {
+  wrongAttributes: string[];
+  missingRequiredAttributes: string[];
+}
 ```
 
 ## 📖 API Reference
@@ -96,7 +152,24 @@ Load and return a schema by name.
 const schema = xsdRef.getSchema('aiscripts');
 ```
 
-##### `getElementAttributesWithTypes(schemaName: string, elementName: string, hierarchy?: string[])`
+##### `getElementAttributes(schemaName: string, elementName: string, hierarchy?: string[]): AttributeInfo[]`
+
+Get basic attribute information for an element.
+
+**Important**: The `hierarchy` parameter should be provided in **bottom-up order** (from immediate parent to root element).
+
+```typescript
+// For element structure: <aiscripts><actions><do_if>
+// Hierarchy for 'do_if' element should be: ['actions', 'aiscripts']
+const attributes: AttributeInfo[] = xsdRef.getElementAttributes('aiscripts', 'do_if', ['actions', 'aiscripts']);
+// Returns:
+// [{
+//   name: 'value',
+//   node: Element // DOM element reference
+// }]
+```
+
+##### `getElementAttributesWithTypes(schemaName: string, elementName: string, hierarchy?: string[]): EnhancedAttributeInfo[]`
 
 Get all attributes for an element with complete type information including:
 
@@ -111,7 +184,7 @@ Get all attributes for an element with complete type information including:
 ```typescript
 // For element structure: <aiscripts><actions><do_if>
 // Hierarchy for 'do_if' element should be: ['actions', 'aiscripts']
-const attributes = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'aiscripts']);
+const attributes: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'aiscripts']);
 // Returns:
 // [{
 //   name: 'value',
@@ -122,7 +195,7 @@ const attributes = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['
 // }]
 ```
 
-##### `validateAttributeValue(schemaName: string, elementName: string, attributeName: string, value: string, hierarchy?: string[])`
+##### `validateAttributeValue(schemaName: string, elementName: string, attributeName: string, value: string, hierarchy?: string[]): AttributeValidationResult`
 
 Validate an attribute value against XSD constraints.
 
@@ -131,7 +204,7 @@ Validate an attribute value against XSD constraints.
 ```typescript
 // For element structure: <aiscripts><actions><debug_text>
 // Hierarchy for 'debug_text' element should be: ['actions', 'aiscripts']
-const result = xsdRef.validateAttributeValue('aiscripts', 'debug_text', 'chance', '50', ['actions', 'aiscripts']);
+const result: AttributeValidationResult = xsdRef.validateAttributeValue('aiscripts', 'debug_text', 'chance', '50', ['actions', 'aiscripts']);
 // Returns:
 // {
 //   isValid: true,
@@ -155,30 +228,35 @@ const elementDef = xsdRef.getElementDefinition('aiscripts', 'do_if', ['actions',
 
 #### Static Methods
 
-##### `XsdReference.validateAttributeNames(attributeInfos: any[], providedAttributes: string[])`
+##### `XsdReference.validateAttributeNames(attributeInfos: EnhancedAttributeInfo[], providedAttributes: string[]): AttributeNameValidationResult`
 
 Validate attribute names against schema definitions. This static method checks which attributes are valid and identifies missing required attributes.
 
+**🔧 Infrastructure Attribute Handling**: XML infrastructure attributes (`xmlns`, `xmlns:*`, `xsi:*`) are automatically filtered out before validation.
+
 ```typescript
 // Get attribute info first
-const attributeInfos = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'aiscripts']);
-const providedAttrs = ['value', 'chance', 'invalid_attr'];
+const attributeInfos: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'aiscripts']);
+const providedAttrs = ['value', 'chance', 'xmlns:xsi', 'invalid_attr'];
 
-const nameValidation = XsdReference.validateAttributeNames(attributeInfos, providedAttrs);
+const nameValidation: AttributeNameValidationResult = XsdReference.validateAttributeNames(attributeInfos, providedAttrs);
 // Returns:
 // {
-//   wrongAttributes: ['invalid_attr'],           // Attributes not in schema
+//   wrongAttributes: ['invalid_attr'],           // Infrastructure attrs filtered out
 //   missingRequiredAttributes: []                // Required attributes missing
 // }
+// Note: 'xmlns:xsi' is ignored and doesn't appear in wrongAttributes
 ```
 
-##### `XsdReference.validateAttributeValueAgainstRules(attributeInfos: any[], attributeName: string, attributeValue: string)`
+##### `XsdReference.validateAttributeValueAgainstRules(attributeInfos: EnhancedAttributeInfo[], attributeName: string, attributeValue: string)`
 
 Validate an attribute value against all XSD rules (patterns, enumerations, ranges, etc.). This static method provides detailed validation with rule violation information.
 
+**🔧 Infrastructure Attribute Handling**: XML infrastructure attributes (`xmlns`, `xmlns:*`, `xsi:*`) are automatically ignored and always return `{ isValid: true }`.
+
 ```typescript
 // Get attribute info first
-const attributeInfos = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'aiscripts']);
+const attributeInfos: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'aiscripts']);
 
 const valueValidation = XsdReference.validateAttributeValueAgainstRules(
   attributeInfos,
@@ -204,6 +282,85 @@ const invalidValidation = XsdReference.validateAttributeValueAgainstRules(
 //   errorMessage: "Value must be <= 100",
 //   violatedRules: ["Value must be <= 100"]
 // }
+
+// Infrastructure attributes are ignored:
+const infraValidation = XsdReference.validateAttributeValueAgainstRules(
+  attributeInfos,
+  'xmlns:xsi',
+  'http://www.w3.org/2001/XMLSchema-instance'
+);
+// Returns:
+// {
+//   isValid: true
+// }
+```
+
+##### `XsdReference.getAttributePossibleValues(attributeInfos: EnhancedAttributeInfo[], attributeName: string): Map<string, string>`
+
+Get all possible enumeration values for an attribute, if it has enumeration restrictions.
+
+**🔧 Infrastructure Attribute Handling**: XML infrastructure attributes always return an empty Map.
+
+```typescript
+// Get attribute info first
+const attributeInfos: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'aiscripts']);
+
+const possibleValues: Map<string, string> = XsdReference.getAttributePossibleValues(attributeInfos, 'operator');
+// Returns: Map<string, string> where key is enum value, value is annotation
+// Example: Map { 'eq' => 'Equal to', 'ne' => 'Not equal to', 'gt' => 'Greater than', ... }
+// Returns: Map() (empty map if no enumeration exists or if it's an infrastructure attribute)
+
+// Usage examples:
+if (possibleValues.size > 0) {
+  console.log('Available values:');
+  for (const [value, annotation] of possibleValues) {
+    console.log(`  ${value}: ${annotation || '(no description)'}`);
+  }
+
+  // Get just the values as an array
+  const valueArray = Array.from(possibleValues.keys());
+  console.log('Values only:', valueArray); // ['eq', 'ne', 'gt', 'ge', 'lt', 'le']
+}
+```
+
+##### `XsdReference.filterAttributesByType(attributeInfos: EnhancedAttributeInfo[], attributeType: string): string[]`
+
+Filter attributes by their XSD type (e.g., 'xs:string', 'xs:int', 'expression').
+
+**🔧 Infrastructure Attribute Handling**: XML infrastructure attributes are automatically excluded from results.
+
+```typescript
+// Get attribute info first
+const attributeInfos: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'aiscripts']);
+
+const stringAttributes: string[] = XsdReference.filterAttributesByType(attributeInfos, 'xs:string');
+// Returns: ['comment', 'name'] (example - attributes with xs:string type)
+
+const expressionAttributes: string[] = XsdReference.filterAttributesByType(attributeInfos, 'expression');
+// Returns: ['value', 'chance'] (example - attributes with expression type)
+```
+
+##### `XsdReference.filterAttributesByRestriction(attributeInfos: EnhancedAttributeInfo[], restrictionType: 'enumeration' | 'pattern' | 'length' | 'range'): string[]`
+
+Filter attributes by the type of XSD restriction they have.
+
+**🔧 Infrastructure Attribute Handling**: XML infrastructure attributes are automatically excluded from results.
+
+```typescript
+// Get attribute info first
+const attributeInfos: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'aiscripts']);
+
+const enumAttributes: string[] = XsdReference.filterAttributesByRestriction(attributeInfos, 'enumeration');
+// Returns: ['operator', 'type'] (example - attributes with enumeration restrictions)
+
+const patternAttributes: string[] = XsdReference.filterAttributesByRestriction(attributeInfos, 'pattern');
+// Returns: ['ref', 'name'] (example - attributes with pattern restrictions)
+
+const rangeAttributes: string[] = XsdReference.filterAttributesByRestriction(attributeInfos, 'range');
+// Returns: ['min', 'max'] (example - attributes with numeric range restrictions)
+
+const lengthAttributes: string[] = XsdReference.filterAttributesByRestriction(attributeInfos, 'length');
+// Returns: ['text'] (example - attributes with length restrictions)
 ```
 
 #### Benefits of Static Methods
@@ -221,15 +378,17 @@ The static methods provide several advantages for validation workflows:
 ```typescript
 // 1. Get schema and attribute info once
 const xsdRef = new XsdReference('./tests/data/xsd');
-const attributeInfos = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'aiscripts']);
+const attributeInfos: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'aiscripts']);
 
 // 2. Validate attribute names (fast, no schema lookup needed)
-const nameValidation = XsdReference.validateAttributeNames(attributeInfos, ['value', 'invalid_attr']);
+// Infrastructure attributes (xmlns, xsi:) are automatically filtered out
+const nameValidation: AttributeNameValidationResult = XsdReference.validateAttributeNames(attributeInfos, ['value', 'xmlns:xsi', 'invalid_attr']);
 if (nameValidation.wrongAttributes.length > 0) {
-  console.error('Invalid attributes:', nameValidation.wrongAttributes);
+  console.error('Invalid attributes:', nameValidation.wrongAttributes); // Only shows 'invalid_attr'
 }
 
 // 3. Validate attribute values (fast, no schema lookup needed)
+// Infrastructure attributes automatically return { isValid: true }
 for (const attrName of validAttributes) {
   const valueValidation = XsdReference.validateAttributeValueAgainstRules(
     attributeInfos,
@@ -238,6 +397,19 @@ for (const attrName of validAttributes) {
   );
   if (!valueValidation.isValid) {
     console.error(`Invalid value for ${attrName}:`, valueValidation.violatedRules);
+  }
+}
+
+// 4. Use helper methods to analyze attributes by type or restriction
+const enumAttributes: string[] = XsdReference.filterAttributesByRestriction(attributeInfos, 'enumeration');
+const possibleValues: Map<string, string> = XsdReference.getAttributePossibleValues(attributeInfos, 'operator');
+
+// Work with possible values Map
+if (possibleValues.size > 0) {
+  console.log('Operator values:', Array.from(possibleValues.keys()));
+  // Check if a specific value is valid
+  if (possibleValues.has('eq')) {
+    console.log('eq annotation:', possibleValues.get('eq'));
   }
 }
 ```
@@ -285,7 +457,58 @@ const schemaName = XsdDetector.getSchemaName('./scripts/my-script.xml');
 - **md**: Mission director and macro definitions
 - **common**: Shared type definitions
 
-## 📝 Validation Features
+## � Infrastructure Attribute Handling
+
+The validation system automatically handles XML infrastructure attributes to focus validation on content-relevant attributes:
+
+### What are Infrastructure Attributes?
+
+Infrastructure attributes are XML namespace and schema-related attributes that are part of the XML specification itself, not your content:
+
+- `xmlns` - Default namespace declaration
+- `xmlns:*` - Namespace prefix declarations (e.g., `xmlns:xsi`)
+- `xsi:*` - XML Schema Instance attributes (e.g., `xsi:schemaLocation`)
+
+### Automatic Filtering
+
+All static validation methods automatically filter out infrastructure attributes:
+
+```xml
+<!-- Example XML with infrastructure attributes -->
+<do_if value="player.money gt 1000"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="..."
+       chance="50">
+  <!-- content -->
+</do_if>
+```
+
+```typescript
+// Only 'value' and 'chance' are validated; xmlns/xsi attributes are ignored
+const attributeInfos = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', hierarchy);
+const nameValidation = XsdReference.validateAttributeNames(
+  attributeInfos,
+  ['value', 'chance', 'xmlns:xsi', 'xsi:schemaLocation']
+);
+// Result: { wrongAttributes: [], missingRequiredAttributes: [] }
+// Infrastructure attributes don't appear in wrongAttributes
+
+const valueValidation = XsdReference.validateAttributeValueAgainstRules(
+  attributeInfos,
+  'xmlns:xsi',
+  'http://www.w3.org/2001/XMLSchema-instance'
+);
+// Result: { isValid: true } - Infrastructure attributes always pass
+```
+
+### Benefits
+
+- **🎯 Focus on Content**: Validation focuses on your actual XML content
+- **📊 Accurate Counts**: Statistics show only content-relevant attributes
+- **🔄 Compatibility**: Works seamlessly with XML files that include namespace declarations
+- **⚡ Performance**: No unnecessary validation of infrastructure attributes
+
+## �📝 Validation Features
 
 ### Attribute Type Validation
 
@@ -342,13 +565,15 @@ npm run build
 📄 Testing: order.dock.xml
    Schema detected: aiscripts
    Elements found: 803
-   Attributes found: 1220
+   Attributes found: 1220        # Content attributes only (infrastructure filtered)
    ✅ Elements valid: 803/803
    ✅ Attributes valid: 1220/1220
    ✅ Attribute values valid: 1220/1220
 ```
 
 Green checkmarks (✅) appear only when valid count equals total count.
+
+**Note**: Attribute counts exclude XML infrastructure attributes (`xmlns`, `xmlns:*`, `xsi:*`) to provide accurate content validation statistics.
 
 ## 🏗️ Architecture
 
@@ -432,7 +657,7 @@ The system automatically discovers and applies XSD validation rules. To add supp
 ### XML Features
 
 - ✅ **Multi-line attributes** - Normalized before validation
-- ✅ **XML namespaces** - Excluded from validation counts
+- ✅ **XML namespaces** - Infrastructure attributes (`xmlns`, `xmlns:*`, `xsi:*`) automatically filtered from validation
 - ✅ **Element hierarchy** - Context-aware element resolution
 - ✅ **Schema includes** - Automatic XSD include resolution
 
@@ -485,14 +710,33 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ```typescript
 // Check if attribute has enumerations
+const attributes: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'aiscripts']);
 const attr = attributes.find(a => a.name === 'type');
-if (attr.enumValues?.length > 0) {
+if (attr && attr.enumValues?.length > 0) {
   console.log('Valid values:', attr.enumValues);
 }
 
+// Get all possible values for an enumeration attribute
+const possibleValues: Map<string, string> = XsdReference.getAttributePossibleValues(attributes, 'operator');
+console.log('Possible values:', Array.from(possibleValues.keys())); // ['eq', 'ne', 'gt', 'ge', 'lt', 'le']
+
+// Check individual values and their annotations
+if (possibleValues.has('eq')) {
+  console.log('eq means:', possibleValues.get('eq') || '(no description)');
+}
+
+// Convert to array if needed for compatibility
+const valuesArray: string[] = Array.from(possibleValues.keys());
+
+// Filter attributes by restriction type
+const enumAttrs: string[] = XsdReference.filterAttributesByRestriction(attributes, 'enumeration');
+const patternAttrs: string[] = XsdReference.filterAttributesByRestriction(attributes, 'pattern');
+console.log('Enum attributes:', enumAttrs);
+console.log('Pattern attributes:', patternAttrs);
+
 // Validate with detailed error info (remember: hierarchy in bottom-up order)
-const hierarchy = ['actions', 'aiscripts']; // parent -> root
-const result = schema.validateAttributeValue('do_if', 'value', 'condition', hierarchy);
+const hierarchy: string[] = ['actions', 'aiscripts']; // parent -> root
+const result: AttributeValidationResult = schema.validateAttributeValue('do_if', 'value', 'condition', hierarchy);
 if (!result.isValid) {
   console.error('Validation failed:', result.errorMessage);
   if (result.allowedValues) {
@@ -500,14 +744,17 @@ if (!result.isValid) {
   }
 }
 
+// Infrastructure attributes are automatically handled
+const allAttrs = ['value', 'chance', 'xmlns:xsi', 'xsi:schemaLocation'];
+const nameValidation: AttributeNameValidationResult = XsdReference.validateAttributeNames(attributes, allAttrs);
+// Infrastructure attributes won't appear in wrongAttributes
+
 // Get all validation constraints (remember: hierarchy in bottom-up order)
-const attrs = schema.getElementAttributesWithTypes('do_if', ['actions', 'aiscripts']);
+const attrs: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('do_if', ['actions', 'aiscripts']);
 attrs.forEach(attr => {
   console.log(`${attr.name}: ${attr.type}`);
   console.log(`  Required: ${attr.required}`);
   console.log(`  Patterns: ${attr.patterns?.length || 0}`);
-  console.log(`  Enums: ${attr.enumValues?.length || 0}`);
-});
   console.log(`  Enums: ${attr.enumValues?.length || 0}`);
 });
 ```

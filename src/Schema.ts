@@ -27,21 +27,19 @@ interface HierarchyCache {
   elementSearchResults: Map<string, Element[]>;
   attributeCache: Map<string, AttributeInfo[]>;
   hierarchyValidation: Map<string, boolean>;
+  elementDefinitionCache: Map<string, Element | undefined>; // New cache for getElementDefinition
 }
 
-interface PerformanceMetrics {
-  cacheHits: number;
-  cacheMisses: number;
-  totalLookups: number;
-  avgSearchDepth: number;
-}
 
-interface AttributeInfo {
+
+export interface AttributeInfo {
   name: string;
   node: Element;
   type?: string;
   required?: boolean;
   enumValues?: string[];
+  enumValuesAnnotations?: Map<string, string>; // Map of enum value to its annotation text
+  annotation?: string; // Attribute's own annotation text
   patterns?: string[]; // Changed to support multiple patterns
   minLength?: number;
   maxLength?: number;
@@ -51,7 +49,23 @@ interface AttributeInfo {
   maxExclusive?: number;
 }
 
-interface AttributeValidationResult {
+export interface EnhancedAttributeInfo {
+  name: string;
+  type?: string;
+  required?: boolean;
+  enumValues?: string[];
+  enumValuesAnnotations?: Map<string, string>; // Map of enum value to its annotation text
+  annotation?: string; // Attribute's own annotation text
+  patterns?: string[]; // Changed to support multiple patterns
+  minLength?: number;
+  maxLength?: number;
+  minInclusive?: number;
+  maxInclusive?: number;
+  minExclusive?: number;
+  maxExclusive?: number;
+}
+
+export interface AttributeValidationResult {
   isValid: boolean;
   expectedType?: string;
   allowedValues?: string[];
@@ -71,7 +85,6 @@ export class Schema {
   private elementMap: Record<string, ElementMapEntry[]>;
   private elementContexts: Record<string, ElementContext[]>;
   private cache!: HierarchyCache;
-  private metrics!: PerformanceMetrics;
   private maxCacheSize: number = 10000;
   constructor(xsdFilePath: string, includeFiles: string[] = []) {
     // Initialize caches and metrics first
@@ -97,19 +110,9 @@ export class Schema {
       definitionReachability: new Map(),
       elementSearchResults: new Map(),
       attributeCache: new Map(),
-      hierarchyValidation: new Map()
+      hierarchyValidation: new Map(),
+      elementDefinitionCache: new Map()
     };
-
-    this.metrics = {
-      cacheHits: 0,
-      cacheMisses: 0,
-      totalLookups: 0,
-      avgSearchDepth: 0
-    };
-  }
-
-  public getCacheStats(): PerformanceMetrics {
-    return { ...this.metrics };
   }
 
   public clearCache(): void {
@@ -144,6 +147,13 @@ export class Schema {
       const toKeep = entries.slice(-Math.floor(this.maxCacheSize / 2));
       this.cache.attributeCache.clear();
       toKeep.forEach(([key, value]) => this.cache.attributeCache.set(key, value));
+    }
+
+    if (this.cache.elementDefinitionCache.size > this.maxCacheSize) {
+      const entries = Array.from(this.cache.elementDefinitionCache.entries());
+      const toKeep = entries.slice(-Math.floor(this.maxCacheSize / 2));
+      this.cache.elementDefinitionCache.clear();
+      toKeep.forEach(([key, value]) => this.cache.elementDefinitionCache.set(key, value));
     }
   }
 
@@ -518,7 +528,7 @@ export class Schema {
         const refGroup = groups[refGroupName];
         if (refGroup) {
           // Extract elements from the group and mark them with group membership
-          // Only pass the immediate parent element, not the full chain
+          // Only pass the immediate parent, not the full chain
           const immediateParent = currentParents.length > 0 ? [currentParents[0]] : [];
           this.extractElementsFromGroupWithParentContext(refGroup, refGroupName, elementContexts, groups, types, ns, immediateParent);
         }
@@ -633,192 +643,94 @@ export class Schema {
   }
 
   public getElementDefinition(elementName: string, hierarchy: string[] = []): Element | undefined {
+    // Create cache key from element name and hierarchy
+    const hierarchyKey = hierarchy.length > 0 ? hierarchy.join('|') : '';
+    const fullCacheKey = `${elementName}::${hierarchyKey}`;
+
+    // Check if we have an exact match in cache
+    if (this.cache.elementDefinitionCache.has(fullCacheKey)) {
+      return this.cache.elementDefinitionCache.get(fullCacheKey);
+    }
+
+    // Check for partial matches in cache - look for any cached key that starts with our element name
+    // and has a hierarchy that our current hierarchy extends
+    if (hierarchy.length > 0) {
+      for (const [cachedKey, cachedElement] of this.cache.elementDefinitionCache) {
+        if (cachedKey.startsWith(`${elementName}::`)) {
+          // Extract the cached hierarchy
+          const cachedHierarchyStr = cachedKey.substring(`${elementName}::`.length);
+          if (cachedHierarchyStr === '') continue; // Skip global element cache entries
+
+          const cachedHierarchy = cachedHierarchyStr.split('|');
+
+          // Check if the current hierarchy starts with the cached hierarchy
+          // If cached: [parent, grandparent] and current: [parent, grandparent, great-grandparent]
+          // then we can use the cached result since it's a more specific match
+          if (cachedHierarchy.length <= hierarchy.length) {
+            let isMatch = true;
+            for (let i = 0; i < cachedHierarchy.length; i++) {
+              if (cachedHierarchy[i] !== hierarchy[i]) {
+                isMatch = false;
+                break;
+              }
+            }
+
+            if (isMatch && cachedElement) {
+              // Found a matching cached result for a shorter hierarchy
+
+              // Cache this result for the current full hierarchy too
+              this.cache.elementDefinitionCache.set(fullCacheKey, cachedElement);
+              this.ensureCacheSize();
+
+              return cachedElement;
+            }
+          }
+        }
+      }
+    }
+
+    // No cache hit, perform the actual search
+
+    let result: Element | undefined;
+
     // Step 1: If no hierarchy provided, only return global elements
     if (hierarchy.length === 0) {
       // Look for global elements (direct children of schema root)
       const globalElements = this.getGlobalElementDefinitions(elementName);
-      return globalElements.length > 0 ? globalElements[0] : undefined;
-    }
+      result = globalElements.length > 0 ? globalElements[0] : undefined;
+    } else {
+      // Step 2: INCREMENTAL HIERARCHY APPROACH
+      // hierarchy = [immediate_parent, grandparent, great_grandparent, ...]
+      // Try each level incrementally: bottom-up expansion, then top-down search
 
-    // Step 2: INCREMENTAL HIERARCHY APPROACH
-    // hierarchy = [immediate_parent, grandparent, great_grandparent, ...]
-    // Try each level incrementally: bottom-up expansion, then top-down search
+      for (let level = 1; level <= hierarchy.length; level++) {
+        // Take the first 'level' elements from hierarchy (bottom-up expansion)
+        const currentHierarchy = hierarchy.slice(0, level);
 
-    for (let level = 1; level <= hierarchy.length; level++) {
-      // Take the first 'level' elements from hierarchy (bottom-up expansion)
-      const currentHierarchy = hierarchy.slice(0, level);
+        // Reverse for top-down search: [great_grandparent, ..., grandparent, immediate_parent]
+        const topDownHierarchy = [...currentHierarchy].reverse();
 
-      // Reverse for top-down search: [great_grandparent, ..., grandparent, immediate_parent]
-      const topDownHierarchy = [...currentHierarchy].reverse();
+        // Try to find element with this hierarchy level using top-down search
+        const foundElement = this.findElementTopDown(elementName, topDownHierarchy);
 
-      // Try to find element with this hierarchy level using top-down search
-      const foundElement = this.findElementTopDown(elementName, topDownHierarchy);
+        if (foundElement) {
+          // Found a definition at this level
+          result = foundElement;
 
-      if (foundElement) {
-        // Found a definition at this level - check if it's unique enough
-        // For now, return the first match (we can add uniqueness checking later)
-        return foundElement;
-      }
-    }
+          // Cache this intermediate result too (it might be useful for future lookups)
+          const intermediateCacheKey = `${elementName}::${currentHierarchy.join('|')}`;
+          this.cache.elementDefinitionCache.set(intermediateCacheKey, result);
 
-    // No definition found at any hierarchy level
-    return undefined;
-  }
-
-  /**
-   * Check if an element context can appear in the given parent within the hierarchy
-   */
-  private canElementAppearInParent(context: ElementContext, parentName: string, hierarchy: string[]): boolean {
-    // If the context has explicit parent information, use it
-    if (context.parents.length > 0) {
-      return context.parents.includes(parentName);
-    }
-
-    // If the context belongs to groups, check if those groups can appear in the parent
-    if (context.groups.length > 0) {
-      for (const groupName of context.groups) {
-        if (this.canGroupAppearInParent(groupName, parentName)) {
-          return true;
+          break; // Exit the loop since we found a match
         }
       }
     }
 
-    // If no specific parent/group information, this might be a global element
-    // that can appear anywhere - we'll need to check via the old method as fallback
-    return this.canElementAppearInParentViaSearch(context.element, parentName);
-  }
+    // Cache the final result (even if undefined)
+    this.cache.elementDefinitionCache.set(fullCacheKey, result);
+    this.ensureCacheSize();
 
-  /**
-   * Check if a group can appear in a given parent element
-   */
-  private canGroupAppearInParent(groupName: string, parentName: string): boolean {
-    // Get the parent element/type definitions
-    const parentDefs = this.getGlobalElementOrTypeDefs(parentName);
-
-    for (const parentDef of parentDefs) {
-      if (this.doesDefinitionReferenceGroup(parentDef, groupName)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  /**
-   * Check if a definition (element or type) references a specific group
-   */
-  private doesDefinitionReferenceGroup(definition: Element, groupName: string): boolean {
-    const ns = 'xs:';
-    const visited = new Set<string>();
-
-    const searchForGroupRef = (node: Element): boolean => {
-      if (!node || node.nodeType !== 1) return false;
-
-      const nodeKey = `${node.nodeName}:${node.getAttribute('name') || node.getAttribute('ref') || 'anon'}`;
-      if (visited.has(nodeKey)) return false;
-      visited.add(nodeKey);
-
-      // Check if this is a direct group reference to our target group
-      if (node.nodeName === ns + 'group' && node.getAttribute('ref') === groupName) {
-        return true;
-      }
-
-      // Handle type references
-      if (node.nodeName === ns + 'element') {
-        const typeName = node.getAttribute('type');
-        if (typeName && this.schemaIndex.types[typeName]) {
-          if (searchForGroupRef(this.schemaIndex.types[typeName])) {
-            return true;
-          }
-        }
-      }
-
-      // Recursively search children
-      for (let i = 0; i < node.childNodes.length; i++) {
-        const child = node.childNodes[i];
-        if (child.nodeType === 1) {
-          if (searchForGroupRef(child as Element)) {
-            return true;
-          }
-        }
-      }
-
-      return false;
-    };
-
-    return searchForGroupRef(definition);
-  }
-
-  /**
-   * Fallback method to check if an element can appear in a parent via dynamic search
-   */
-  private canElementAppearInParentViaSearch(elementNode: Element, parentName: string): boolean {
-    const parentDefs = this.getGlobalElementOrTypeDefs(parentName);
-
-    for (const parentDef of parentDefs) {
-      const foundElements = this.findElementsInDefinition(parentDef, elementNode.getAttribute('name') || '');
-      if (foundElements.some(found => found === elementNode)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  /**
-   * Select the best context match from multiple matching contexts
-   */
-  private selectBestContextMatch(contexts: ElementContext[], hierarchy: string[]): Element {
-    if (contexts.length === 1) {
-      return contexts[0].element;
-    }
-
-    // Score each context based on how well it matches the hierarchy
-    const scoredContexts = contexts.map(ctx => {
-      let score = 0;
-
-      // HIGHEST PRIORITY: Prefer contexts with fewer parents (more specific)
-      // A context with Parents=[order] is more specific than Parents=[params, aiscript]
-      // This should be the dominant factor - use much higher weights
-      score += (100 - ctx.parents.length) * 10; // Much higher weight for specificity
-
-      // SECOND PRIORITY: Prefer contexts whose parents appear earlier in hierarchy (more specific)
-      // In hierarchy [library, interrupts, aiscript], "library" at index 0 is more specific than "interrupts" at index 1
-      for (const parent of ctx.parents) {
-        const hierarchyIndex = hierarchy.indexOf(parent);
-        if (hierarchyIndex !== -1) {
-          // Give higher score to parents that appear earlier in hierarchy (more specific/closer to element)
-          score += (hierarchy.length - hierarchyIndex) * 10; // Lower index = more specific
-        }
-      }
-
-      // THIRD PRIORITY: Prefer contexts that have exact parent matches in the hierarchy
-      for (let i = 0; i < hierarchy.length && i < ctx.parents.length; i++) {
-        if (ctx.parents[i] === hierarchy[i]) {
-          score += 5; // Reduced weight for exact match
-        }
-      }
-
-      // FOURTH PRIORITY: General bonus for parents that appear in the hierarchy
-      for (const parent of ctx.parents) {
-        if (hierarchy.includes(parent)) {
-          score += 2; // Reduced weight for general bonus
-        }
-      }
-
-      // Add small bonus for having parent information at all
-      score += ctx.parents.length * 0.1; // Very small bonus
-
-      // Add small bonus for group membership
-      score += ctx.groups.length * 0.1; // Very small bonus
-
-      return { context: ctx, score };
-    });
-
-    // Sort by score (highest first)
-    scoredContexts.sort((a, b) => b.score - a.score);
-
-    return scoredContexts[0].context.element;
+    return result;
   }
 
   private getGlobalElementDefinitions(elementName: string): Element[] {
@@ -831,111 +743,7 @@ export class Schema {
     return [];
   }
 
-  private findElementInHierarchyPath(elementName: string, hierarchy: string[]): Element | null {
-    if (hierarchy.length === 0) return null;
-
-    // Create cache key
-    const cacheKey = `${elementName}:${hierarchy.join('>')}`;
-
-    // Check cache first
-    if (this.cache.hierarchyLookups.has(cacheKey)) {
-      this.metrics.cacheHits++;
-      this.metrics.totalLookups++;
-      return this.cache.hierarchyLookups.get(cacheKey)!;
-    }
-
-    this.metrics.cacheMisses++;
-    this.metrics.totalLookups++;
-
-    // Start from the most general context (root) and work down to specific
-    // hierarchy is [parent, grandparent, great-grandparent, ...] so we reverse it
-    const reversedHierarchy = [...hierarchy].reverse();
-
-    // Try to find element by walking down the hierarchy from root to target
-    const walkHierarchy = (currentLevel: number, currentDefs: Element[]): Element[] => {
-      if (currentLevel >= reversedHierarchy.length) {
-        // We've reached the target level, look for the element
-        const results: Element[] = [];
-        for (const def of currentDefs) {
-          const found = this.findElementsInDefinitionCached(def, elementName);
-          results.push(...found);
-          // Early exit optimization: if we found a result, don't keep searching
-          if (results.length > 0) break;
-        }
-        return results;
-      }
-
-      // Get the next level in the hierarchy
-      const nextElementName = reversedHierarchy[currentLevel];
-      const nextLevelDefs: Element[] = [];
-
-      for (const def of currentDefs) {
-        const found = this.findElementsInDefinitionCached(def, nextElementName);
-        nextLevelDefs.push(...found);
-        // Early exit optimization: if we have enough definitions, stop searching
-        if (nextLevelDefs.length >= 3) break;
-      }
-
-      if (nextLevelDefs.length === 0) return [];
-
-      // Continue walking down the hierarchy
-      return walkHierarchy(currentLevel + 1, nextLevelDefs);
-    };
-
-    // Start with all possible root definitions
-    const rootElementName = reversedHierarchy[0];
-    const rootDefs = this.getGlobalElementOrTypeDefs(rootElementName);
-
-    if (rootDefs.length === 0) {
-      // Cache the null result
-      this.cache.hierarchyLookups.set(cacheKey, null);
-      this.ensureCacheSize();
-      return null;
-    }
-
-    // Walk the hierarchy starting from level 1 (after root)
-    const foundElements = walkHierarchy(1, rootDefs);
-
-    // Return the first (most specific) match
-    const result = foundElements.length > 0 ? foundElements[0] : null;
-
-    // Cache the result
-    this.cache.hierarchyLookups.set(cacheKey, result);
-    this.ensureCacheSize();
-
-    return result;
-  }
-
-  // Keep the old method for backward compatibility
-  private findElementInHierarchy(elementName: string, parentName?: string, grandparentName?: string): Element | null {
-    const contextCandidates: Element[] = [];
-
-    // Priority 1: Three-level context (element in parent in grandparent)
-    if (grandparentName) {
-      const grandparentDefs = this.getGlobalElementOrTypeDefs(grandparentName);
-      for (const grandparentDef of grandparentDefs) {
-        const parentDefs = this.findElementsInDefinition(grandparentDef, parentName!);
-        for (const parentDef of parentDefs) {
-          const elementDef = this.findElementsInDefinition(parentDef, elementName);
-          if (elementDef.length > 0) contextCandidates.push(...elementDef);
-        }
-      }
-    }
-
-    // Priority 2: Two-level context (element in parent)
-    if (parentName) {
-      const parentDefs = this.getGlobalElementOrTypeDefs(parentName);
-      for (const parentDef of parentDefs) {
-        const elementDefs = this.findElementsInDefinition(parentDef, elementName);
-        if (elementDefs.length > 0) contextCandidates.push(...elementDefs);
-      }
-    }
-
-    // Return the first (most specific) match
-    return contextCandidates.length > 0 ? contextCandidates[0] : null;
-  }
-
-  private getGlobalElementOrTypeDefs(name: string): Element[] {
+    private getGlobalElementOrTypeDefs(name: string): Element[] {
     const defs: Element[] = [];
     const seenNodes = new Set<Element>();
 
@@ -1064,30 +872,10 @@ export class Schema {
 
     searchInNode(typeNode);
 
-    // Update metrics
-    this.metrics.avgSearchDepth = (this.metrics.avgSearchDepth + maxSearchDepth) / 2;
-
     return results;
-  }  private findElementsInDefinitionCached(parentDef: Element, elementName: string): Element[] {
-    // Create cache key based on parent definition and element name
-    const parentKey = parentDef.getAttribute('name') || parentDef.getAttribute('type') || 'anonymous';
-    const cacheKey = `${parentKey}:${elementName}:${parentDef.nodeName}`;
+  }
 
-    // Check cache first
-    if (this.cache.elementSearchResults.has(cacheKey)) {
-      // Don't increment metrics here - this is an internal cache for performance only
-      return this.cache.elementSearchResults.get(cacheKey)!;
-    }
-
-    // Delegate to original method
-    const results = this.findElementsInDefinition(parentDef, elementName);
-
-    // Cache the results
-    this.cache.elementSearchResults.set(cacheKey, results);
-    this.ensureCacheSize();
-
-    return results;
-  }  public getElementAttributes(elementName: string, hierarchy: string[] = []): AttributeInfo[] {
+  public getElementAttributes(elementName: string, hierarchy: string[] = []): AttributeInfo[] {
     // STRICT HIERARCHY RULE: If hierarchy provided, only search in hierarchy context
     // Never fall back to global elements when hierarchy is specified
 
@@ -1120,13 +908,8 @@ export class Schema {
 
     // Check cache first
     if (this.cache.attributeCache.has(cacheKey)) {
-      this.metrics.cacheHits++;
-      this.metrics.totalLookups++;
       return this.cache.attributeCache.get(cacheKey)!;
     }
-
-    this.metrics.cacheMisses++;
-    this.metrics.totalLookups++;
 
     const attributes: Record<string, Element> = {};
 
@@ -1249,253 +1032,24 @@ export class Schema {
   }
 
   /**
-   * Select the best element definition based on hierarchical context.
-   * Uses full hierarchy analysis to determine which definition is reachable.
-   */
-  private selectBestDefinitionByContext(elementName: string, definitions: Element[], hierarchy: string[]): Element[] {
-    if (definitions.length <= 1) {
-      return definitions;
-    }
-
-    // If no hierarchy provided, return all definitions
-    if (hierarchy.length === 0) {
-      return definitions;
-    }
-
-    // For each definition, check if it can be reached through the given hierarchy
-    const reachableDefs = definitions.filter(def => {
-      return this.isDefinitionReachableFromHierarchy(def, elementName, hierarchy);
-    });
-
-    if (reachableDefs.length > 0) {
-      return reachableDefs;
-    }
-
-    // If no definition is reachable through the hierarchy, try a simpler parent-only check
-    const parentReachableDefs = definitions.filter(def => {
-      return this.isDefinitionReachableFromParent(def, hierarchy[0], elementName);
-    });
-
-    if (parentReachableDefs.length > 0) {
-      return parentReachableDefs;
-    }
-
-    // Return all definitions if no clear match found
-    return definitions;
-  }  /**
-   * Check if an element definition is reachable from a parent element context
-   * by analyzing the schema structure dynamically (with caching)
-   */
-  private isDefinitionReachableFromParent(elementDef: Element, parentElementName: string, targetElementName: string): boolean {
-    // Create cache key for definition reachability
-    const elementDefKey = elementDef.getAttribute('name') || elementDef.getAttribute('type') || 'anonymous';
-    const cacheKey = `reach:${elementDefKey}:${parentElementName}:${targetElementName}`;
-
-    // Check cache first (internal cache, don't track metrics)
-    if (this.cache.definitionReachability.has(cacheKey)) {
-      return this.cache.definitionReachability.get(cacheKey)!;
-    }
-
-    // Get all possible parent element definitions
-    const parentDefs = this.getGlobalElementOrTypeDefs(parentElementName);
-
-    // Check if the target element (with this specific definition) can be found within any parent definition
-    let result = false;
-    for (const parentDef of parentDefs) {
-      if (this.canElementDefinitionBeFoundInParent(parentDef, targetElementName, elementDef)) {
-        result = true;
-        break; // Early exit optimization
-      }
-    }
-
-    // Cache the result
-    this.cache.definitionReachability.set(cacheKey, result);
-    this.ensureCacheSize();
-
-    return result;
-  }
-
-  /**
-   * Check if a specific element definition can be found within a parent definition's context
-   */
-  private canElementDefinitionBeFoundInParent(parentDef: Element, targetElementName: string, targetElementDef: Element): boolean {
-    const foundElements = this.findElementsInDefinition(parentDef, targetElementName);
-
-    // Check if any of the found elements matches our specific definition
-    // We can compare by checking if they have the same attribute group or type structure
-    for (const foundElement of foundElements) {
-      if (this.areElementDefinitionsEquivalent(foundElement, targetElementDef)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  /**
-   * Compare two element definitions to see if they are equivalent
-   */
-  private areElementDefinitionsEquivalent(def1: Element, def2: Element): boolean {
-    // First check if they are the exact same node
-    if (def1 === def2) {
-      return true;
-    }
-
-    // Compare element name
-    const name1 = def1.getAttribute('name');
-    const name2 = def2.getAttribute('name');
-    if (name1 !== name2) {
-      return false;
-    }
-
-    // Compare type attribute
-    const type1 = def1.getAttribute('type');
-    const type2 = def2.getAttribute('type');
-    if (type1 !== type2) {
-      return false;
-    }
-
-    // Compare by attribute groups
-    const attrGroup1 = this.getElementAttributeGroup(def1);
-    const attrGroup2 = this.getElementAttributeGroup(def2);
-
-    if (attrGroup1 && attrGroup2) {
-      if (attrGroup1 !== attrGroup2) {
-        return false;
-      }
-    } else if (attrGroup1 !== attrGroup2) {
-      // One has attribute group, the other doesn't
-      return false;
-    }
-
-    // Compare other key attributes that might make them different
-    const minOccurs1 = def1.getAttribute('minOccurs');
-    const minOccurs2 = def2.getAttribute('minOccurs');
-    if (minOccurs1 !== minOccurs2) {
-      return false;
-    }
-
-    const maxOccurs1 = def1.getAttribute('maxOccurs');
-    const maxOccurs2 = def2.getAttribute('maxOccurs');
-    if (maxOccurs1 !== maxOccurs2) {
-      return false;
-    }
-
-    // If we have the same name, type, attribute groups, and occurrence constraints,
-    // consider them equivalent
-    return true;
-  }  /**
-   * Extract the primary attribute group reference from an element definition
-   */
-  private getElementAttributeGroup(elementDef: Element): string | null {
-    // Look for inline complexType
-    for (let i = 0; i < elementDef.childNodes.length; i++) {
-      const child = elementDef.childNodes[i];
-      if (child.nodeType === 1 && (child as Element).nodeName === 'xs:complexType') {
-        // Check for attributeGroup references in complexType
-        for (let j = 0; j < child.childNodes.length; j++) {
-          const grandchild = child.childNodes[j];
-          if (grandchild.nodeType === 1 && (grandchild as Element).nodeName === 'xs:attributeGroup') {
-            const ref = (grandchild as Element).getAttribute('ref');
-            if (ref) {
-              return ref;
-            }
-          }
-        }
-      }
-    }
-
-    return null;
-  }  /**
-   * Check if an element definition is reachable through a full hierarchy path.
-   * This walks through the entire hierarchy to validate the path is valid in the schema.
-   * (Optimized with caching and early exits)
-   */
-  private isDefinitionReachableFromHierarchy(elementDef: Element, targetElementName: string, hierarchy: string[]): boolean {
-    if (hierarchy.length === 0) return false;
-
-    // Create cache key for hierarchy validation
-    const elementDefKey = elementDef.getAttribute('name') || elementDef.getAttribute('type') || 'anonymous';
-    const cacheKey = `hierarchy:${elementDefKey}:${targetElementName}:${hierarchy.join('>')}`;
-
-    // Check cache first (internal cache, don't track metrics)
-    if (this.cache.hierarchyValidation.has(cacheKey)) {
-      return this.cache.hierarchyValidation.get(cacheKey)!;
-    }
-
-    // Start from the root of the hierarchy and walk down to see if we can reach the target element
-    // hierarchy is [parent, grandparent, great-grandparent, ...] so we need to reverse it
-    const reversedHierarchy = [...hierarchy].reverse();
-
-    // Get all possible starting points (root elements)
-    const rootElementName = reversedHierarchy[0];
-    const rootDefs = this.getGlobalElementOrTypeDefs(rootElementName);
-
-    if (rootDefs.length === 0) {
-      this.cache.hierarchyValidation.set(cacheKey, false);
-      this.ensureCacheSize();
-      return false;
-    }
-
-    // Walk through the hierarchy step by step with optimizations
-    const walkHierarchyForDefinition = (currentLevel: number, currentDefs: Element[]): boolean => {
-      // If we've reached the parent level, check if we can find the target element with the specific definition
-      if (currentLevel >= reversedHierarchy.length) {
-        // Now look for the target element in these definitions
-        for (const parentDef of currentDefs) {
-          const foundElements = this.findElementsInDefinitionCached(parentDef, targetElementName);
-          // Check if any found element matches our specific definition
-          for (const foundElement of foundElements) {
-            if (this.areElementDefinitionsEquivalent(foundElement, elementDef)) {
-              return true;
-            }
-          }
-        }
-        return false;
-      }
-
-      // Get the next level in the hierarchy
-      const nextElementName = reversedHierarchy[currentLevel];
-      const nextLevelDefs: Element[] = [];
-
-      // Find all instances of the next element in the current definitions
-      for (const currentDef of currentDefs) {
-        const found = this.findElementsInDefinitionCached(currentDef, nextElementName);
-        nextLevelDefs.push(...found);
-        // Performance optimization: limit number of definitions to explore
-        if (nextLevelDefs.length >= 5) break;
-      }
-
-      if (nextLevelDefs.length === 0) return false;
-
-      // Continue walking down the hierarchy
-      return walkHierarchyForDefinition(currentLevel + 1, nextLevelDefs);
-    };
-
-    // Start the walk from level 1 (since level 0 is the root we already have)
-    const result = walkHierarchyForDefinition(1, rootDefs);
-
-    // Cache the result
-    this.cache.hierarchyValidation.set(cacheKey, result);
-    this.ensureCacheSize();
-
-    return result;
-  }
-
-  /**
    * Get enhanced attribute information including type and validation details
    */
-  public getElementAttributesWithTypes(elementName: string, hierarchy: string[] = []): AttributeInfo[] {
+  public getElementAttributesWithTypes(elementName: string, hierarchy: string[] = []): EnhancedAttributeInfo[] {
     const attributes = this.getElementAttributes(elementName, hierarchy);
 
     // Enhance each attribute with type information
     return attributes.map(attr => {
-      const enhancedAttr: AttributeInfo = {
+      const enhancedAttr: EnhancedAttributeInfo = {
         name: attr.name,
-        node: attr.node,
         type: attr.node.getAttribute('type') || undefined,
         required: attr.node.getAttribute('use') === 'required'
       };
+
+      // Extract attribute's own annotation
+      const annotation = this.extractAnnotationText(attr.node);
+      if (annotation) {
+        enhancedAttr.annotation = annotation;
+      }
 
       // If the attribute has a type, get comprehensive validation information
       if (enhancedAttr.type) {
@@ -1668,6 +1222,12 @@ export class Schema {
     };
 
     extractValidationRules(typeNode);
+
+    // Extract enum value annotations if we have enumeration values
+    if (validationInfo.enumValues && validationInfo.enumValues.length > 0) {
+      validationInfo.enumValuesAnnotations = this.extractEnumValueAnnotations(typeNode);
+    }
+
     return validationInfo;
   }
 
@@ -1714,7 +1274,7 @@ export class Schema {
   /**
    * Validate a value against all possible XSD restrictions
    */
-  private validateValueWithRestrictions(value: string, attrInfo: AttributeInfo): AttributeValidationResult {
+  private validateValueWithRestrictions(value: string, attrInfo: EnhancedAttributeInfo): AttributeValidationResult {
     // Normalize the value for validation (join multi-line content)
     const normalizedValue = this.normalizeAttributeValue(value);
 
@@ -2093,31 +1653,6 @@ export class Schema {
   }
 
   /**
-   * Check if multiple element definitions are equivalent and return one if they are
-   * @param elements Array of element definitions to compare
-   * @returns Single element if all are equivalent, undefined if they differ
-   */
-  private getUniqueElementIfEquivalent(elements: Element[]): Element | undefined {
-    if (elements.length <= 1) {
-      return elements[0];
-    }
-
-    // Use the first element as the reference for comparison
-    const referenceElement = elements[0];
-
-    // Check if all elements are equivalent to the reference
-    for (let i = 1; i < elements.length; i++) {
-      if (!this.areElementDefinitionsEquivalent(referenceElement, elements[i])) {
-        // Found a non-equivalent element, so they're not all the same
-        return undefined;
-      }
-    }
-
-    // All elements are equivalent, return the first one
-    return referenceElement;
-  }
-
-  /**
    * Build a mapping from type names to element names that use those types
    */
   private buildTypeToElementMapping(
@@ -2276,5 +1811,70 @@ export class Schema {
 
     // Return the first found element (could add uniqueness logic here later)
     return targetElements.length > 0 ? targetElements[0] : undefined;
+  }
+
+  /**
+   * Extract annotation text from an XSD element's xs:annotation/xs:documentation
+   */
+  private extractAnnotationText(element: Element): string | undefined {
+    const ns = 'xs:';
+
+    // Look for xs:annotation child element
+    for (let i = 0; i < element.childNodes.length; i++) {
+      const child = element.childNodes[i];
+      if (child.nodeType === 1 && (child as Element).nodeName === ns + 'annotation') {
+        const annotationElement = child as Element;
+
+        // Look for xs:documentation within xs:annotation
+        for (let j = 0; j < annotationElement.childNodes.length; j++) {
+          const docChild = annotationElement.childNodes[j];
+          if (docChild.nodeType === 1 && (docChild as Element).nodeName === ns + 'documentation') {
+            const docElement = docChild as Element;
+
+            // Get the text content
+            const textContent = docElement.textContent;
+            if (textContent && textContent.trim()) {
+              return textContent.trim();
+            }
+          }
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Extract enum value annotations from a type definition
+   */
+  private extractEnumValueAnnotations(typeNode: Element): Map<string, string> {
+    const annotations = new Map<string, string>();
+    const ns = 'xs:';
+
+    const extractFromNode = (node: Element): void => {
+      if (!node || node.nodeType !== 1) return;
+
+      // Check if this is an enumeration element
+      if (node.nodeName === ns + 'enumeration') {
+        const value = node.getAttribute('value');
+        if (value) {
+          const annotationText = this.extractAnnotationText(node);
+          if (annotationText) {
+            annotations.set(value, annotationText);
+          }
+        }
+      }
+
+      // Recursively search child nodes
+      for (let i = 0; i < node.childNodes.length; i++) {
+        const child = node.childNodes[i];
+        if (child.nodeType === 1) {
+          extractFromNode(child as Element);
+        }
+      }
+    };
+
+    extractFromNode(typeNode);
+    return annotations;
   }
 }
