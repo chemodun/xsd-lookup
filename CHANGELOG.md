@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.2](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.2.1...xsd-lookup@v1.2.2) (2025-06-25)
+
+### Bug Fixes
+
+* update xmldom dependency to @xmldom/xmldom version 0.8.10 to solve dependabot alerts ([288adfa](https://github.com/chemodun/xsd-lookup/commit/288adfa625c337ad4b2cd2b02702dc6d1f51d02c))
+
 ## [1.2.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.2.0...xsd-lookup@v1.2.1) (2025-06-25)
 
 ### Code Refactoring
