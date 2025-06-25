@@ -2,7 +2,7 @@ const { XsdReference } = require('../dist/XsdReference');
 const { XsdDetector } = require('../dist/XsdDetector');
 const fs = require('fs');
 const path = require('path');
-const { DOMParser } = require('xmldom');
+const { DOMParser } = require('@xmldom/xmldom');
 
 console.log('=== Comprehensive All-Files XSD Validation Test ===\n');
 
@@ -76,7 +76,7 @@ function generateJUnitXML() {
 
   let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
   xml += `<testsuites name="XSD Validation Tests" tests="${totalTestsCount}" failures="${totalFailuresCount}" errors="${totalErrorsCount}" time="${totalTime.toFixed(3)}">\n`;
-  
+
   // Add global properties with comprehensive test statistics
   xml += '  <properties>\n';
   xml += `    <property name="total_files_processed" value="${totalFiles}" />\n`;
@@ -581,7 +581,7 @@ function testDirectory(dirInfo) {
         elementValidationDetails.slice(0, 10).forEach(detail => { // Limit to first 10 for readability
           const status = detail.validAttributes === detail.attributeCount ? '✅' : '❌';
           validationOutput.push(`  ${status} ${detail.element}: ${detail.validAttributes}/${detail.attributeCount} attributes valid`);
-          
+
           // Add attribute-level details for failed validations
           if (detail.invalidAttributes > 0) {
             const invalidDetails = detail.validationDetails.filter(v => !v.valueValid);
@@ -590,7 +590,7 @@ function testDirectory(dirInfo) {
             });
           }
         });
-        
+
         if (elementValidationDetails.length > 10) {
           validationOutput.push(`  ... and ${elementValidationDetails.length - 10} more elements`);
         }
@@ -600,7 +600,7 @@ function testDirectory(dirInfo) {
       validationOutput.push('\n📊 Validation Statistics:');
       validationOutput.push(`🎯 Pattern Validation: ${patternValidationStats.tested} tested, ${patternValidationStats.passed} passed, ${patternValidationStats.failed} failed`);
       validationOutput.push(`📋 Enumeration Validation: ${enumValidationStats.tested} tested, ${enumValidationStats.passed} passed, ${enumValidationStats.failed} failed`);
-      
+
       // Add attribute type distribution for this file
       const fileAttributeTypes = {};
       elementValidationDetails.forEach(detail => {
@@ -610,7 +610,7 @@ function testDirectory(dirInfo) {
           }
         });
       });
-      
+
       if (Object.keys(fileAttributeTypes).length > 0) {
         validationOutput.push('\n🔧 Attribute Types in File:');
         const sortedTypes = Object.entries(fileAttributeTypes)
@@ -632,7 +632,7 @@ function testDirectory(dirInfo) {
       validationOutput.push(`⚙️ Attributes: ${fileAttributesTotal} (${fileAttributesValid} valid)`);
       validationOutput.push(`🔍 Attribute Values: ${fileAttributeValuesTotal} (${fileAttributeValuesValid} valid)`);
       validationOutput.push(`❌ Validation Errors: ${fileValidationErrors.length}`);
-      
+
       if (fileValidationErrors.length > 0) {
         validationOutput.push('\n❌ Errors Found:');
         fileValidationErrors.slice(0, 5).forEach(error => {
@@ -683,18 +683,18 @@ function testDirectory(dirInfo) {
   }
 
   testSuite.time = (new Date() - suiteStartTime) / 1000;
-  
+
   // Add suite-level properties with summary statistics
   const suiteElementsTotal = testSuite.testCases.reduce((sum, tc) => {
     const match = tc.systemOut.match(/🔧 Elements found: (\d+)/);
     return sum + (match ? parseInt(match[1]) : 0);
   }, 0);
-  
+
   const suiteAttributesTotal = testSuite.testCases.reduce((sum, tc) => {
     const match = tc.systemOut.match(/⚙️ Attributes found: (\d+)/);
     return sum + (match ? parseInt(match[1]) : 0);
   }, 0);
-  
+
   testSuite.properties = {
     'total_xml_files': testSuite.tests,
     'total_elements_validated': suiteElementsTotal,
@@ -702,7 +702,7 @@ function testDirectory(dirInfo) {
     'validation_success_rate': testSuite.failures === 0 ? '100%' : `${((testSuite.tests - testSuite.failures) / testSuite.tests * 100).toFixed(1)}%`,
     'expected_schema': dirInfo.expectedSchema
   };
-  
+
   testSuites.push(testSuite);
 }
 
