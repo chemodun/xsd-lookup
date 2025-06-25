@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.3](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.2.2...xsd-lookup@v1.2.3) (2025-06-25)
+
+
+### Bug Fixes
+
+* postfix after the replace xmldom with @xmldom/xmldom and remove deprecated types dependency ([d5fb181](https://github.com/chemodun/xsd-lookup/commit/d5fb181d97962b9fda642fe345e85cdd95253dc9))
+* update node engine requirement to &gt;= 22.0.0 in package.json and package-lock.json ([afcb1d5](https://github.com/chemodun/xsd-lookup/commit/afcb1d520b563bd386cfb455f212795dc2daa043))
+
 ## [1.2.2](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.2.1...xsd-lookup@v1.2.2) (2025-06-25)
 
 ### Bug Fixes
