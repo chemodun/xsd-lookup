@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.4](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.2.3...xsd-lookup@v1.2.4) (2025-06-25)
+
+### Bug Fixes
+
+* update DOMParser import to use @xmldom/xmldom and clean up whitespace in test_all_files_comprehensive.js.  stupidly forget about test file, but it was worked locally ... ([f253d8e](https://github.com/chemodun/xsd-lookup/commit/f253d8e88f5e84ae44c6020eaa7121c937ca9760))
+
 ## [1.2.3](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.2.2...xsd-lookup@v1.2.3) (2025-06-25)
 
 ### Bug Fixes
