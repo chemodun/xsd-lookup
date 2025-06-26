@@ -2,7 +2,6 @@
 
 ## [1.3.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.2.4...xsd-lookup@v1.3.0) (2025-06-26)
 
-
 ### Features
 
 * add child element discovery and annotation extraction methods ([fd97075](https://github.com/chemodun/xsd-lookup/commit/fd97075f25e15038f2bbd79b8c3de4f609c7b5f2))
