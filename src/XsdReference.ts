@@ -24,6 +24,8 @@ export class XsdReference {
 
   /**
    * Discover and parse XSD includes from a schema file
+   * @param xsdFilePath The path to the XSD file to scan for includes
+   * @returns Array of absolute paths to included XSD files that exist
    */
   private discoverIncludes(xsdFilePath: string): string[] {
     try {
@@ -51,6 +53,8 @@ export class XsdReference {
 
   /**
    * Load a schema dynamically based on schema name
+   * @param schemaName The name of the schema to load (without .xsd extension)
+   * @returns The loaded Schema instance, or null if loading failed
    */
   private loadSchema(schemaName: string): Schema | null {
     // Check if already loaded
@@ -78,7 +82,10 @@ export class XsdReference {
     } catch (error) {
       console.error(`Error loading schema ${schemaName}:`, error);
       return null;
-    }  }  /**
+    }
+  }
+
+    /**
    * Get the appropriate schema for a given XML file (legacy method)
    * @deprecated Use XsdDetector.detectSchemaFromXml() and then getSchema() instead
    */
@@ -94,6 +101,8 @@ export class XsdReference {
 
   /**
    * Get schema by type name (loads on demand)
+   * @param schemaType The type/name of the schema to retrieve
+   * @returns The Schema instance if found and loaded successfully, null otherwise
    */
   public getSchema(schemaType: string): Schema | null {
     return this.loadSchema(schemaType);
@@ -101,6 +110,7 @@ export class XsdReference {
 
   /**
    * Get all currently loaded schema types
+   * @returns Array of schema type names that are currently loaded in memory
    */
   public getAvailableSchemas(): string[] {
     return Array.from(this.schemas.keys());
@@ -108,6 +118,7 @@ export class XsdReference {
 
   /**
    * Get all discoverable schema files in the XSD directory
+   * @returns Array of schema names (without .xsd extension) found in the XSD directory
    */
   public getDiscoverableSchemas(): string[] {
     try {
@@ -133,7 +144,9 @@ export class XsdReference {
     }
 
     return schema.getElementDefinition(elementName, hierarchy);
-  }  /**
+  }
+
+  /**
    * Get element attributes using a specific schema by name
    * @param schemaName The schema to use
    * @param elementName The element name to find
@@ -146,7 +159,9 @@ export class XsdReference {
     }
 
     return schema.getElementAttributes(elementName, hierarchy);
-  }  /**
+  }
+
+  /**
    * Get element attributes with type information
    * @param schemaName The schema to use
    * @param elementName The element name to find
@@ -159,7 +174,9 @@ export class XsdReference {
     }
 
     return schema.getElementAttributesWithTypes(elementName, hierarchy);
-  }  /**
+  }
+
+  /**
    * Validate an attribute value against the schema
    * @param schemaName The schema to use
    * @param elementName The element name
@@ -178,6 +195,9 @@ export class XsdReference {
 
   /**
    * Validate XML against a specific schema by name
+   * @param xmlFilePath The path to the XML file to validate
+   * @param schemaName Optional schema name to use. If not provided, will try to detect from XML
+   * @returns Object containing validation result and any errors found
    */
   public validateXmlFile(xmlFilePath: string, schemaName?: string): { isValid: boolean; errors: string[] } {
     let targetSchemaName = schemaName;
@@ -503,5 +523,31 @@ export class XsdReference {
    */
   private static filterOutInfrastructureAttributes(attributeNames: string[]): string[] {
     return attributeNames.filter(attr => !this.isXmlInfrastructureAttribute(attr));
+  }
+
+  /**
+   * Get possible child elements for a given element by name and hierarchy
+   * @param schemaName The schema to use
+   * @param elementName The parent element name
+   * @param hierarchy The element hierarchy in bottom-up order (parent → root)
+   * @returns Map where key is child element name and value is its annotation text
+   */
+  public getPossibleChildElements(schemaName: string, elementName: string, hierarchy: string[] = []): Map<string, string> {
+    const schema = this.loadSchema(schemaName);
+    if (!schema) {
+      return new Map<string, string>();
+    }
+
+    return schema.getPossibleChildElements(elementName, hierarchy);
+  }
+
+  /**
+   * Extract annotation text from an XML element.
+   * This static method provides access to Schema's annotation extraction functionality.
+   * @param element The XML element to extract annotation from
+   * @returns The annotation text, or undefined if no annotation found
+   */
+  public static extractAnnotationText(element: Element): string | undefined {
+    return Schema.extractAnnotationText(element);
   }
 }

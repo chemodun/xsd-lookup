@@ -104,6 +104,9 @@ export class Schema {
     this.elementContexts = this.schemaIndex.elementContexts;
   }
 
+  /**
+   * Initialize all cache structures with empty maps
+   */
   private initializeCaches(): void {
     this.cache = {
       hierarchyLookups: new Map(),
@@ -115,10 +118,16 @@ export class Schema {
     };
   }
 
+  /**
+   * Clear all caches by reinitializing them
+   */
   public clearCache(): void {
     this.initializeCaches();
   }
 
+  /**
+   * Ensure cache sizes don't exceed the maximum limit using simple LRU eviction
+   */
   private ensureCacheSize(): void {
     if (this.cache.hierarchyLookups.size > this.maxCacheSize) {
       // Simple LRU: clear oldest half
@@ -157,11 +166,21 @@ export class Schema {
     }
   }
 
+  /**
+   * Load and parse an XML file into a DOM Document
+   * @param filePath The path to the XML file to load
+   * @returns Parsed DOM Document
+   */
   private loadXml(filePath: string): Document {
     const xml = fs.readFileSync(filePath, 'utf8');
     return new DOMParser().parseFromString(xml, 'application/xml');
   }
 
+  /**
+   * Merge included XSD documents into the main schema document
+   * @param mainDoc The main schema document to merge into
+   * @param includeDoc The included schema document to merge from
+   */
   private mergeXsds(mainDoc: Document, includeDoc: Document): void {
     const mainSchema = mainDoc.documentElement;
     const includeSchema = includeDoc.documentElement;
@@ -172,6 +191,14 @@ export class Schema {
       }
     }
   }
+  /**
+   * Recursively collect all element definitions from the schema DOM
+   * @param node The current node to examine
+   * @param parentName The name of the parent element
+   * @param elements Array to collect found elements into
+   * @param ns The XML Schema namespace prefix
+   * @returns Array of collected elements with their parent information
+   */
   private collectElements(node: Node, parentName: string | null, elements: ElementWithParent[] = [], ns: string = 'xs:'): ElementWithParent[] {
     if (!node) return elements;
     if (node.nodeType === 1) {
@@ -190,6 +217,10 @@ export class Schema {
     }
     return elements;
   }
+  /**
+   * Build a map of element names to their definitions and parent relationships
+   * @returns Record mapping element names to arrays of their definitions
+   */
   private buildElementMap(): Record<string, ElementMapEntry[]> {
     const elements = this.collectElements(this.doc.documentElement, null);
     const elementMap: Record<string, ElementMapEntry[]> = {};
@@ -199,6 +230,12 @@ export class Schema {
     });
     return elementMap;
   }
+  /**
+   * Index the schema by collecting all global elements, groups, attribute groups, and types
+   * @param root The root schema element
+   * @param ns The XML Schema namespace prefix
+   * @returns Complete schema index with all definitions and contexts
+   */
   private indexSchema(root: Element, ns: string = 'xs:'): SchemaIndex {
     const elements: Record<string, Element[]> = {};  // Changed to arrays
     const groups: Record<string, Element> = {};
@@ -733,6 +770,11 @@ export class Schema {
     return result;
   }
 
+  /**
+   * Get global element definitions by name (direct children of schema root only)
+   * @param elementName The name of the element to find
+   * @returns Array of global element definitions
+   */
   private getGlobalElementDefinitions(elementName: string): Element[] {
     // Only return truly global elements (direct children of schema root)
     if (this.schemaIndex.elements[elementName]) {
@@ -743,6 +785,11 @@ export class Schema {
     return [];
   }
 
+  /**
+   * Get global element or type definitions by name for hierarchical search
+   * @param name The name to search for
+   * @returns Array of element or type definitions matching the name
+   */
     private getGlobalElementOrTypeDefs(name: string): Element[] {
     const defs: Element[] = [];
     const seenNodes = new Set<Element>();
@@ -778,7 +825,15 @@ export class Schema {
     }
 
     return defs;
-  }  private findElementsInDefinition(parentDef: Element, elementName: string): Element[] {
+  }
+
+  /**
+   * Find element definitions within a parent definition by element name
+   * @param parentDef The parent element or type definition to search in
+   * @param elementName The name of the element to find
+   * @returns Array of matching element definitions
+   */
+  private findElementsInDefinition(parentDef: Element, elementName: string): Element[] {
     if (!parentDef) return [];
 
     const ns = 'xs:';
@@ -875,6 +930,104 @@ export class Schema {
     return results;
   }
 
+  /**
+   * Find ALL immediate child elements within a parent definition (without filtering by name)
+   * This is similar to findElementsInDefinition but returns all direct child elements
+   * @param parentDef The parent element or type definition to search in
+   * @returns Array of all immediate child element definitions
+   */
+  private findAllElementsInDefinition(parentDef: Element): Element[] {
+    if (!parentDef) return [];
+
+    const ns = 'xs:';
+    const results: Element[] = [];
+
+    // Get the actual type definition to search in
+    let typeNode = parentDef;
+
+    // If parentDef is an element, get its type
+    if (parentDef.nodeName === ns + 'element') {
+      const typeName = parentDef.getAttribute('type');
+      if (typeName && this.schemaIndex.types[typeName]) {
+        typeNode = this.schemaIndex.types[typeName];
+      } else {
+        // Look for inline complexType
+        for (let i = 0; i < parentDef.childNodes.length; i++) {
+          const child = parentDef.childNodes[i];
+          if (child.nodeType === 1 && (child as Element).nodeName === ns + 'complexType') {
+            typeNode = child as Element;
+            break;
+          }
+        }
+      }
+    }
+
+    // Search for IMMEDIATE child elements (limited depth for performance)
+    const visited = new Set<Element>();
+
+    const searchInNode = (node: Element, depth: number = 0): void => {
+      if (!node || node.nodeType !== 1) return;
+
+      // Depth limit for performance - prevent excessive recursion
+      if (depth > 20) {
+        return;
+      }
+
+      // Use the actual DOM node reference for cycle detection
+      if (visited.has(node)) return;
+      visited.add(node);
+
+      // If this is an element definition, add it to results
+      if (node.nodeName === ns + 'element' && node.getAttribute('name')) {
+        results.push(node);
+        return; // Don't recurse into found elements - we only want immediate children
+      }
+
+      // Handle type references and extensions
+      if (node.nodeName === ns + 'extension' && node.getAttribute('base')) {
+        const baseName = node.getAttribute('base')!;
+        const baseType = this.schemaIndex.types[baseName];
+        if (baseType) {
+          searchInNode(baseType, depth + 1);
+        }
+      }
+
+      // Handle group references
+      if (node.nodeName === ns + 'group' && node.getAttribute('ref')) {
+        const refName = node.getAttribute('ref')!;
+        const groupDef = this.schemaIndex.groups[refName];
+        if (groupDef) {
+          searchInNode(groupDef, depth + 1);
+        }
+      }
+
+      // Handle structural elements - recurse into ALL children
+      if (node.nodeName === ns + 'sequence' ||
+          node.nodeName === ns + 'choice' ||
+          node.nodeName === ns + 'all' ||
+          node.nodeName === ns + 'complexType' ||
+          node.nodeName === ns + 'complexContent' ||
+          node.nodeName === ns + 'simpleContent' ||
+          node.nodeName === ns + 'group') {
+
+        // For structural nodes, recursively search all children
+        for (let i = 0; i < node.childNodes.length; i++) {
+          const child = node.childNodes[i];
+          if (child.nodeType === 1) {
+            searchInNode(child as Element, depth + 1);
+          }
+        }
+      }
+    };
+
+    searchInNode(typeNode, 0);
+
+    return results;
+  }
+
+  /**
+   * Get enhanced attribute information including type and validation details
+   */
   public getElementAttributes(elementName: string, hierarchy: string[] = []): AttributeInfo[] {
     // STRICT HIERARCHY RULE: If hierarchy provided, only search in hierarchy context
     // Never fall back to global elements when hierarchy is specified
@@ -902,6 +1055,12 @@ export class Schema {
     return [];
   }
 
+  /**
+   * Get element attributes with hierarchy context for internal use
+   * @param elementName The element name to get attributes for
+   * @param hierarchy The element hierarchy in bottom-up order
+   * @returns Array of attribute information
+   */
   private getElementAttributesWithHierarchy(elementName: string, hierarchy: string[]): AttributeInfo[] {
     // Create cache key
     const cacheKey = `attrs:${elementName}:${hierarchy.join('>')}`;
@@ -938,6 +1097,12 @@ export class Schema {
     return result;
   }
 
+  /**
+   * Recursively collect attributes from element and type definitions
+   * @param node The current node to collect attributes from
+   * @param attributes Record to accumulate found attributes
+   * @param visited Set to track visited nodes and prevent infinite recursion
+   */
   private collectAttrs(node: Element, attributes: Record<string, Element>, visited: Set<string> = new Set()): void {
     if (!node || node.nodeType !== 1) return;
 
@@ -1030,7 +1195,6 @@ export class Schema {
       }
     }
   }
-
   /**
    * Get enhanced attribute information including type and validation details
    */
@@ -1046,7 +1210,7 @@ export class Schema {
       };
 
       // Extract attribute's own annotation
-      const annotation = this.extractAnnotationText(attr.node);
+      const annotation = Schema.extractAnnotationText(attr.node);
       if (annotation) {
         enhancedAttr.annotation = annotation;
       }
@@ -1439,6 +1603,11 @@ export class Schema {
   /**
    * Check if a built-in XSD type is numeric (based on actual XSD built-in types)
    */
+  /**
+   * Check if a built-in XSD type is numeric (based on actual XSD built-in types)
+   * @param builtinType The built-in XSD type to check
+   * @returns True if the type is numeric, false otherwise
+   */
   private isBuiltinNumericType(builtinType: string): boolean {
     const numericTypes = [
       'xs:int', 'xs:integer', 'xs:long', 'xs:short', 'xs:byte',
@@ -1688,6 +1857,10 @@ export class Schema {
 
   /**
    * Recursively scan a type element for type references
+   * @param node The type element to scan
+   * @param parentContext The parent type name for context
+   * @param typeToElements Map to accumulate type-to-element mappings
+   * @param ns The XML Schema namespace prefix
    */
   private scanTypeForTypeReferences(
     node: Element,
@@ -1730,6 +1903,9 @@ export class Schema {
 
   /**
    * Recursively scan an element for inline elements that have type references
+   * @param element The element to scan for inline type references
+   * @param typeToElements Map to accumulate type-to-element mappings
+   * @param ns The XML Schema namespace prefix
    */
   private scanElementForInlineTypeReferences(
     element: Element,
@@ -1816,7 +1992,7 @@ export class Schema {
   /**
    * Extract annotation text from an XSD element's xs:annotation/xs:documentation
    */
-  private extractAnnotationText(element: Element): string | undefined {
+  public static extractAnnotationText(element: Element): string | undefined {
     const ns = 'xs:';
 
     // Look for xs:annotation child element
@@ -1846,6 +2022,8 @@ export class Schema {
 
   /**
    * Extract enum value annotations from a type definition
+   * @param typeNode The type definition element to extract enum annotations from
+   * @returns Map of enum values to their annotation text
    */
   private extractEnumValueAnnotations(typeNode: Element): Map<string, string> {
     const annotations = new Map<string, string>();
@@ -1858,7 +2036,7 @@ export class Schema {
       if (node.nodeName === ns + 'enumeration') {
         const value = node.getAttribute('value');
         if (value) {
-          const annotationText = this.extractAnnotationText(node);
+          const annotationText = Schema.extractAnnotationText(node);
           if (annotationText) {
             annotations.set(value, annotationText);
           }
@@ -1876,5 +2054,70 @@ export class Schema {
 
     extractFromNode(typeNode);
     return annotations;
+  }
+
+  /**
+   * Get possible child elements for a given element by name and hierarchy
+   * @param elementName The parent element name
+   * @param hierarchy The element hierarchy in bottom-up order (parent → root)
+   * @returns Map where key is child element name and value is its annotation text
+   */
+  public getPossibleChildElements(elementName: string, hierarchy: string[] = []): Map<string, string> {
+    // Create cache key
+    const cacheKey = `children:${elementName}:${hierarchy.join('>')}`;
+
+    // Check if we have this in cache (reuse existing cache structure)
+    if (this.cache.elementSearchResults.has(cacheKey)) {
+      const cachedResult = this.cache.elementSearchResults.get(cacheKey);
+      if (cachedResult) {
+        const resultMap = new Map<string, string>();
+        for (const elem of cachedResult) {
+          const name = elem.getAttribute('name');
+          const annotation = elem.getAttribute('data-annotation') || '';
+          if (name) {
+            resultMap.set(name, annotation);
+          }
+        }
+        return resultMap;
+      }
+      return new Map<string, string>();
+    }
+
+    // Get the element definition using the same logic as other methods
+    const elementDef = this.getElementDefinition(elementName, hierarchy);
+
+    if (!elementDef) {
+      // Cache empty result
+      this.cache.elementSearchResults.set(cacheKey, []);
+      this.ensureCacheSize();
+      return new Map<string, string>();
+    }
+
+    // Use the new findAllElementsInDefinition method to get all immediate children
+    const childElements = this.findAllElementsInDefinition(elementDef);
+
+    const result = new Map<string, string>();
+
+    // Build result map with annotations
+    for (const element of childElements) {
+      const name = element.getAttribute('name');
+      if (name) {
+        const annotation = Schema.extractAnnotationText(element) || '';
+        result.set(name, annotation);
+      }
+    }
+
+    // Cache the result as Element array (for consistency with existing cache structure)
+    const elementArray = Array.from(result.entries()).map(([name, annotation]) => {
+      // Create a mock element for caching with annotation data
+      const mockElem = this.doc.createElement('element');
+      mockElem.setAttribute('name', name);
+      mockElem.setAttribute('data-annotation', annotation);
+      return mockElem;
+    });
+    this.cache.elementSearchResults.set(cacheKey, elementArray);
+    this.ensureCacheSize();
+
+    return result;
   }
 }

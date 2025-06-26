@@ -105,6 +105,54 @@ interface AttributeNameValidationResult {
 
 ## 📖 API Reference
 
+### 🏷️ Type Definitions
+
+#### Exported Interfaces
+
+```typescript
+// Basic attribute information
+interface AttributeInfo {
+  name: string;
+  node: Element;
+}
+
+// Enhanced attribute information with type details
+interface EnhancedAttributeInfo {
+  name: string;
+  type?: string;
+  required: boolean;
+  patterns?: string[];
+  enumValues?: string[];
+  enumValuesAnnotations?: Map<string, string>;
+  minLength?: number;
+  maxLength?: number;
+  minInclusive?: number;
+  maxInclusive?: number;
+  minExclusive?: number;
+  maxExclusive?: number;
+}
+
+// Attribute validation result
+interface AttributeValidationResult {
+  isValid: boolean;
+  errorMessage?: string;
+  expectedType?: string;
+  restrictions?: string[];
+}
+
+// Attribute name validation result
+interface AttributeNameValidationResult {
+  wrongAttributes: string[];
+  missingRequiredAttributes: string[];
+}
+```
+
+#### Import Types
+
+```typescript
+import { XsdReference, AttributeInfo, EnhancedAttributeInfo, AttributeValidationResult } from './dist/XsdReference';
+```
+
 ### 🏗️ Hierarchy Parameter Usage
 
 **Important**: All methods that accept a `hierarchy` parameter expect it in **bottom-up order** (from immediate parent to root element).
@@ -224,6 +272,82 @@ Get the element definition for a specific element in a schema, considering hiera
 // Hierarchy for 'do_if' element should be: ['actions', 'aiscripts']
 const elementDef = xsdRef.getElementDefinition('aiscripts', 'do_if', ['actions', 'aiscripts']);
 // Returns: Element definition object or undefined if not found
+```
+
+##### `getAvailableSchemas(): string[]`
+
+Get all currently loaded schema types.
+
+```typescript
+const loadedSchemas: string[] = xsdRef.getAvailableSchemas();
+// Returns: ['aiscripts', 'md'] (schemas that are currently loaded in memory)
+```
+
+##### `getDiscoverableSchemas(): string[]`
+
+Get all discoverable schema files in the XSD directory.
+
+```typescript
+const availableSchemas: string[] = xsdRef.getDiscoverableSchemas();
+// Returns: ['aiscripts', 'common', 'md'] (all .xsd files found in directory, without extension)
+```
+
+##### `getPossibleChildElements(schemaName: string, elementName: string, hierarchy?: string[]): Map<string, string>`
+
+Get possible child elements for a given element, with their annotation text.
+
+**Important**: The `hierarchy` parameter should be provided in **bottom-up order** (from immediate parent to root element).
+
+```typescript
+// For element structure: <aiscripts><actions>
+// Get possible children of 'actions' element
+const children: Map<string, string> = xsdRef.getPossibleChildElements('aiscripts', 'actions', ['aiscripts']);
+// Returns: Map where key is child element name, value is annotation text
+// Example: Map { 'do_if' => 'Conditional execution', 'do_while' => 'Loop execution', ... }
+
+// Usage examples:
+if (children.size > 0) {
+  console.log('Possible child elements:');
+  for (const [elementName, annotation] of children) {
+    console.log(`  ${elementName}: ${annotation || '(no description)'}`);
+  }
+}
+```
+
+##### `getSimpleTypesWithBaseType(schemaName: string, baseType: string): string[]`
+
+Get all simple types that use a specific type as their base.
+
+```typescript
+// Find all simple types based on 'lvalueexpression'
+const derivedTypes: string[] = xsdRef.getSimpleTypesWithBaseType('aiscripts', 'lvalueexpression');
+// Returns: ['expression', 'objectref', 'paramname', ...] (types that extend lvalueexpression)
+
+// Find all types based on xs:string
+const stringTypes: string[] = xsdRef.getSimpleTypesWithBaseType('common', 'xs:string');
+// Returns: ['name', 'comment', 'text', ...] (string-based types)
+```
+
+##### `validateXmlFile(xmlFilePath: string, schemaName?: string): { isValid: boolean; errors: string[] }`
+
+Validate an XML file against a schema with comprehensive error reporting.
+
+```typescript
+// Auto-detect schema and validate
+const validation = xsdRef.validateXmlFile('./test-file.xml');
+// Returns:
+// {
+//   isValid: true,
+//   errors: []
+// }
+
+// Force specific schema
+const forcedValidation = xsdRef.validateXmlFile('./test-file.xml', 'aiscripts');
+// Returns:
+// {
+//   isValid: false,
+//   errors: ['XML parse error: unexpected element']
+// }
 ```
 
 #### Static Methods
@@ -361,6 +485,24 @@ const rangeAttributes: string[] = XsdReference.filterAttributesByRestriction(att
 
 const lengthAttributes: string[] = XsdReference.filterAttributesByRestriction(attributeInfos, 'length');
 // Returns: ['text'] (example - attributes with length restrictions)
+```
+
+##### `XsdReference.extractAnnotationText(element: Element): string | undefined`
+
+Extract annotation text from an XML element. This provides access to Schema's annotation extraction functionality.
+
+```typescript
+// This is typically used internally, but can be useful for custom schema processing
+const element: Element = /* DOM element from XSD */;
+const annotation: string | undefined = XsdReference.extractAnnotationText(element);
+// Returns: "Description text from xs:annotation/xs:documentation" or undefined
+
+// Example usage with element definitions:
+const elementDef = xsdRef.getElementDefinition('aiscripts', 'do_if', ['actions', 'aiscripts']);
+if (elementDef) {
+  const description = XsdReference.extractAnnotationText(elementDef);
+  console.log('Element description:', description || 'No description available');
+}
 ```
 
 #### Benefits of Static Methods
