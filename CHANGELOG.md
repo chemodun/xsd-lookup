@@ -2,7 +2,6 @@
 
 ## [1.4.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.3.0...xsd-lookup@v1.4.0) (2025-06-29)
 
-
 ### Features
 
 * add dispose methods to Schema and XsdReference for resource management ([4e0bf49](https://github.com/chemodun/xsd-lookup/commit/4e0bf49c8fe187fe4ee55c7ea23c584728f366ff))
