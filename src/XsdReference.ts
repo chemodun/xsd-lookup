@@ -550,4 +550,30 @@ export class XsdReference {
   public static extractAnnotationText(element: Element): string | undefined {
     return Schema.extractAnnotationText(element);
   }
+
+  /**
+   * Clear a specific schema from the cache
+   * @param schemaName The name of the schema to clear
+   */
+  private clearSchema(schemaName: string): void {
+    // Clear the specific schema from the cache
+    if (this.schemas.has(schemaName)) {
+      this.schemas.get(schemaName)?.dispose(); // Clear the schema's internal caches
+      this.schemas.delete(schemaName);
+    }
+    // Optionally, you can also clear the XSD directory if needed
+    // this.xsdDirectory = '';
+  }
+
+  /**
+   * Clear all schemas and their caches
+   * This method clears all loaded schemas and their internal caches.
+   * It can be used to release resources when the XSD reference is no longer needed.
+   */
+  public dispose(): void {
+    // Clear all schemas from the cache
+    this.schemas.forEach((schema, name) => this.clearSchema(name)); // Clear each schema's internal caches
+    this.schemas.clear();
+    this.xsdDirectory = ''; // Reset the directory if needed
+  }
 }

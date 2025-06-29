@@ -58,6 +58,9 @@ const schema = xsdRef.getSchema(schemaName);
 // Validate an attribute value
 const result: AttributeValidationResult = schema.validateAttributeValue('do_if', 'value', 'player.money gt 1000');
 console.log(result.isValid); // true/false
+
+// Clean up resources when done (optional but recommended)
+xsdRef.dispose();
 ```
 
 ## 🔧 TypeScript Interface Exports
@@ -350,6 +353,23 @@ const forcedValidation = xsdRef.validateXmlFile('./test-file.xml', 'aiscripts');
 // }
 ```
 
+##### `dispose(): void`
+
+Clear all internal caches to release resources.
+
+```typescript
+// Get a schema instance
+const schema = xsdRef.getSchema('aiscripts');
+
+// Use the schema for validation...
+const result = schema.validateAttributeValue('do_if', 'value', 'condition');
+
+// Clean up schema resources when done
+schema.dispose();
+```
+
+**Note**: After calling `dispose()`, the Schema instance may have reduced performance as caches are cleared, but it will still function correctly.
+
 #### Static Methods
 
 ##### `XsdReference.validateAttributeNames(attributeInfos: EnhancedAttributeInfo[], providedAttributes: string[]): AttributeNameValidationResult`
@@ -551,7 +571,7 @@ if (possibleValues.size > 0) {
   console.log('Operator values:', Array.from(possibleValues.keys()));
   // Check if a specific value is valid
   if (possibleValues.has('eq')) {
-    console.log('eq annotation:', possibleValues.get('eq'));
+    console.log('eq annotation:', possibleValues.get('eq') || '(no description)');
   }
 }
 ```
@@ -715,7 +735,10 @@ npm run build
 
 Green checkmarks (✅) appear only when valid count equals total count.
 
-**Note**: Attribute counts exclude XML infrastructure attributes (`xmlns`, `xmlns:*`, `xsi:*`) to provide accurate content validation statistics.
+**Note**:
+
+- Attribute counts exclude XML infrastructure attributes (`xmlns`, `xmlns:*`, `xsi:*`) to provide accurate content validation statistics.
+- Test suite automatically calls `xsdRef.dispose()` at completion to release resources.
 
 ## 🏗️ Architecture
 
@@ -746,6 +769,7 @@ XsdReference
 - **Hierarchical Indexing**: Fast element/attribute lookups
 - **Optimized Type Resolution**: Efficient inheritance chain traversal
 - **Pattern Compilation**: Regex patterns compiled and cached
+- **Resource Management**: Call `dispose()` to clear caches and release resources
 
 ### Benchmark Results
 
@@ -899,6 +923,9 @@ attrs.forEach(attr => {
   console.log(`  Patterns: ${attr.patterns?.length || 0}`);
   console.log(`  Enums: ${attr.enumValues?.length || 0}`);
 });
+
+// Always clean up when done
+xsdRef.dispose();
 ```
 
 ### Available Commands
@@ -921,3 +948,40 @@ npm run rebuild
 ```
 
 🎯 **Ready to validate your X4 mods with confidence!**
+
+## 💡 Best Practices
+
+### Resource Management
+
+For optimal performance and memory usage:
+
+```typescript
+// Good: Dispose when done
+const xsdRef = new XsdReference('./tests/data/xsd');
+try {
+  // Use xsdRef for validation tasks...
+  const result = xsdRef.validateAttributeValue('aiscripts', 'do_if', 'value', 'condition');
+} finally {
+  // Always clean up resources
+  xsdRef.dispose();
+}
+
+// Alternative: Use in limited scope
+function validateFile(xmlPath: string): boolean {
+  const xsdRef = new XsdReference('./tests/data/xsd');
+  
+  try {
+    const schemaName = XsdDetector.getSchemaName(xmlPath);
+    const validation = xsdRef.validateXmlFile(xmlPath, schemaName);
+    return validation.isValid;
+  } finally {
+    xsdRef.dispose();
+  }
+}
+```
+
+### Performance Tips
+
+- Reuse `XsdReference` instances when validating multiple files with the same schemas
+- Call `dispose()` only when completely finished with validation tasks
+- Use static methods (`XsdReference.validateAttributeNames`, etc.) for batch operations with pre-fetched attribute info

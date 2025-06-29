@@ -2120,4 +2120,11 @@ export class Schema {
 
     return result;
   }
+
+  /**
+   * Clear all caches and resources
+   */
+  public dispose(): void {
+    this.initializeCaches();
+  }
 }

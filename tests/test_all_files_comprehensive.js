@@ -782,6 +782,14 @@ console.log('\n' + '='.repeat(60));
 console.log('🎯 TEST COMPLETE');
 console.log('='.repeat(60));
 
+try {
+  // Dispose the XSD reference to release resources
+  xsdRef.dispose();
+}
+catch (error) {
+  console.error('Error disposing XSD reference:', error);
+}
+
 // Final assessment
 if (validFiles === totalFiles && errors.length === 0) {
   console.log('🏆 PERFECT SCORE: All files pass validation!');
