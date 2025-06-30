@@ -194,60 +194,6 @@ export class XsdReference {
   }
 
   /**
-   * Validate XML against a specific schema by name
-   * @param xmlFilePath The path to the XML file to validate
-   * @param schemaName Optional schema name to use. If not provided, will try to detect from XML
-   * @returns Object containing validation result and any errors found
-   */
-  public validateXmlFile(xmlFilePath: string, schemaName?: string): { isValid: boolean; errors: string[] } {
-    let targetSchemaName = schemaName;
-      // If no schema name provided, try to detect it
-    if (!targetSchemaName) {
-      const fileInfo = XsdDetector.detectSchemaFromXml(xmlFilePath);
-      if (!fileInfo.schemaType) {
-        return {
-          isValid: false,
-          errors: ['Could not detect schema type for XML file']
-        };
-      }
-      targetSchemaName = fileInfo.schemaType;
-    }
-
-    const schema = this.loadSchema(targetSchemaName);
-    if (!schema) {
-      return {
-        isValid: false,
-        errors: [`Schema '${targetSchemaName}' could not be loaded`]
-      };
-    }
-
-    // Basic validation - check if file can be parsed
-    try {
-      const content = fs.readFileSync(xmlFilePath, 'utf8');
-      const doc = new DOMParser().parseFromString(content, 'application/xml');
-
-      // Check for parse errors
-      const parseErrors = doc.getElementsByTagName('parsererror');
-      if (parseErrors.length > 0) {
-        return {
-          isValid: false,
-          errors: ['XML parse error: ' + parseErrors[0].textContent]
-        };
-      }
-
-      return {
-        isValid: true,
-        errors: []
-      };
-    } catch (error) {
-      return {
-        isValid: false,
-        errors: [`Error reading/parsing XML: ${error instanceof Error ? error.message : String(error)}`]
-      };
-    }
-  }
-
-  /**
    * Validate attributes against a list of provided attribute names
    * @param attributeInfos The attribute info array from getElementAttributesWithTypes
    * @param providedAttributes Array of attribute names that are provided

@@ -31,22 +31,9 @@ interface HierarchyCache {
 }
 
 
-
 export interface AttributeInfo {
   name: string;
   node: Element;
-  type?: string;
-  required?: boolean;
-  enumValues?: string[];
-  enumValuesAnnotations?: Map<string, string>; // Map of enum value to its annotation text
-  annotation?: string; // Attribute's own annotation text
-  patterns?: string[]; // Changed to support multiple patterns
-  minLength?: number;
-  maxLength?: number;
-  minInclusive?: number;
-  maxInclusive?: number;
-  minExclusive?: number;
-  maxExclusive?: number;
 }
 
 export interface EnhancedAttributeInfo {
@@ -1228,11 +1215,11 @@ export class Schema {
   /**
    * Get comprehensive validation information for a type
    */
-  private getTypeValidationInfo(typeName: string): Partial<AttributeInfo> {
+  private getTypeValidationInfo(typeName: string): Partial<EnhancedAttributeInfo> {
     const typeNode = this.schemaIndex.types[typeName];
     if (!typeNode) return {};
 
-    const validationInfo: Partial<AttributeInfo> = {};
+    const validationInfo: Partial<EnhancedAttributeInfo> = {};
     const ns = 'xs:';
 
     const extractValidationRules = (node: Element): void => {
