@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.4.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.4.0...xsd-lookup@v1.4.1) (2025-06-30)
+
+
+### Bug Fixes
+
+* increase line length limits for headings and code blocks in markdownlint configuration ([e791146](https://github.com/chemodun/xsd-lookup/commit/e791146ff93d13bae2e1966f0e86e1470cf75abc))
+
+
+### Code Refactoring
+
+* update AttributeInfo definition and remove unused validateXmlFile method ([28b9235](https://github.com/chemodun/xsd-lookup/commit/28b9235df5305175b89177b8e19983c95820207d))
+* update README for clarity and accuracy in package definition and XSD validation features ([2a5f40c](https://github.com/chemodun/xsd-lookup/commit/2a5f40c464efd69bd7f75a3c1294e4cb1b715cd8))
+
 ## [1.4.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.3.0...xsd-lookup@v1.4.0) (2025-06-29)
 
 ### Features
