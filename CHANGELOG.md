@@ -2,11 +2,9 @@
 
 ## [1.4.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.4.0...xsd-lookup@v1.4.1) (2025-06-30)
 
-
 ### Bug Fixes
 
 * increase line length limits for headings and code blocks in markdownlint configuration ([e791146](https://github.com/chemodun/xsd-lookup/commit/e791146ff93d13bae2e1966f0e86e1470cf75abc))
-
 
 ### Code Refactoring
 
