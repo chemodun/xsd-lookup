@@ -2,11 +2,9 @@
 
 ## [1.5.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.4.1...xsd-lookup@v1.5.0) (2025-07-04)
 
-
 ### Features
 
 * enhance getPossibleChildElements to support previous sibling context for sequence constraints ([7bbd6b2](https://github.com/chemodun/xsd-lookup/commit/7bbd6b247a8bf827a4287dd5996bd8fbe90f0f11))
-
 
 ### Bug Fixes
 
