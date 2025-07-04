@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.5.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.4.1...xsd-lookup@v1.5.0) (2025-07-04)
+
+
+### Features
+
+* enhance getPossibleChildElements to support previous sibling context for sequence constraints ([7bbd6b2](https://github.com/chemodun/xsd-lookup/commit/7bbd6b247a8bf827a4287dd5996bd8fbe90f0f11))
+
+
+### Bug Fixes
+
+* cast document element and XML parsing result to any for type compatibility introduced by @xmldom/xmldom@~0.9.8 ([ded5c2b](https://github.com/chemodun/xsd-lookup/commit/ded5c2bea5c9d290ee287c27b6a4ffe37cda690a))
+
 ## [1.4.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.4.0...xsd-lookup@v1.4.1) (2025-06-30)
 
 ### Bug Fixes
