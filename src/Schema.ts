@@ -86,7 +86,7 @@ export class Schema {
     }
 
     // Build indexes
-    this.schemaIndex = this.indexSchema(this.doc.documentElement);
+    this.schemaIndex = this.indexSchema(this.doc.documentElement as any);
     this.elementMap = this.buildElementMap();
     this.elementContexts = this.schemaIndex.elementContexts;
   }
@@ -160,7 +160,7 @@ export class Schema {
    */
   private loadXml(filePath: string): Document {
     const xml = fs.readFileSync(filePath, 'utf8');
-    return new DOMParser().parseFromString(xml, 'application/xml');
+    return new DOMParser().parseFromString(xml, 'application/xml') as any;
   }
 
   /**
