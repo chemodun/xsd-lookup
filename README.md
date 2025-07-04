@@ -10,6 +10,8 @@ Developed to support scripting language validation in **X4: Foundations** game m
 - **📊 Comprehensive Attribute Validation**: Validates attribute existence, types, and values
 - **🔧 Infrastructure Attribute Filtering**: Automatically ignores XML namespace attributes (`xmlns`, `xmlns:*`, `xsi:*`)
 - **🔗 Type Inheritance Support**: Handles complex XSD type hierarchies and restrictions
+- **🧩 Hierarchical Context**: Getting list of possible child elements based on current element hierarchy
+- **🔄 Previous Sibling Context**: Optional previous sibling element name to filter results based on sequence constraints
 - **🔀 Union Type Processing**: Merges validation rules from multiple member types
 - **📋 Enumeration Support**: Complete enumeration value extraction and validation with annotations
 - **📏 Range Validation**: Numeric and length constraint validation
@@ -246,11 +248,12 @@ const result: AttributeValidationResult = xsdRef.validateAttributeValue('aiscrip
 // }
 ```
 
-##### `getPossibleChildElements(schemaName: string, elementName: string, hierarchy?: string[]): Map<string, string>`
+##### `getPossibleChildElements(schemaName: string, elementName: string, hierarchy?: string[], previousSibling?: string): Map<string, string>`
 
 Get possible child elements for a given element, with their annotation text.
 
 **Important**: The `hierarchy` parameter should be provided in **bottom-up order** (from immediate parent to root element).
+**Important**: The `previousSibling` parameter can be used to filter results based on sequence constraints (e.g., if the element must come after a specific sibling).
 
 ```typescript
 // For element structure: <aiscript><attention><actions>

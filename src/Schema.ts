@@ -2047,11 +2047,13 @@ export class Schema {
    * Get possible child elements for a given element by name and hierarchy
    * @param elementName The parent element name
    * @param hierarchy The element hierarchy in bottom-up order (parent → root)
+   * @param previousSibling Optional previous sibling element name to filter results based on sequence constraints
    * @returns Map where key is child element name and value is its annotation text
    */
-  public getPossibleChildElements(elementName: string, hierarchy: string[] = []): Map<string, string> {
-    // Create cache key
-    const cacheKey = `children:${elementName}:${hierarchy.join('>')}`;
+  public getPossibleChildElements(elementName: string, hierarchy: string[] = [], previousSibling?: string): Map<string, string> {
+    // Create cache key including previousSibling for proper caching
+    const siblingKey = previousSibling ? `prev:${previousSibling}` : 'noprev';
+    const cacheKey = `children:${elementName}:${hierarchy.join('>')}:${siblingKey}`;
 
     // Check if we have this in cache (reuse existing cache structure)
     if (this.cache.elementSearchResults.has(cacheKey)) {
@@ -2080,13 +2082,22 @@ export class Schema {
       return new Map<string, string>();
     }
 
-    // Use the new findAllElementsInDefinition method to get all immediate children
+    // Get all possible child elements
     const childElements = this.findAllElementsInDefinition(elementDef);
+
+    let filteredElements: Element[];
+
+    // If previousSibling is provided, filter based on sequence constraints
+    if (previousSibling) {
+      filteredElements = this.filterElementsBySequenceConstraints(elementDef, childElements, previousSibling);
+    } else {
+      filteredElements = childElements;
+    }
 
     const result = new Map<string, string>();
 
     // Build result map with annotations
-    for (const element of childElements) {
+    for (const element of filteredElements) {
       const name = element.getAttribute('name');
       if (name) {
         const annotation = Schema.extractAnnotationText(element) || '';
@@ -2106,6 +2117,475 @@ export class Schema {
     this.ensureCacheSize();
 
     return result;
+  }
+
+  /**
+   * Filter child elements based on XSD sequence constraints and previous sibling
+   * @param elementDef The parent element definition
+   * @param allChildren All possible child elements
+   * @param previousSibling The name of the previous sibling element
+   * @returns Filtered array of elements that are valid as next elements
+   */
+  private filterElementsBySequenceConstraints(elementDef: Element, allChildren: Element[], previousSibling: string): Element[] {
+    // For do_if/do_elseif/do_else special case, handle directly
+    if (['do_if', 'do_elseif', 'do_else'].includes(previousSibling)) {
+      return this.filterDoIfSequence(previousSibling, allChildren);
+    }
+
+    // Find the content model (sequence/choice) within the element definition
+    const contentModel = this.findContentModel(elementDef);
+
+    if (!contentModel) {
+      // If no content model found, return all children (fallback)
+      return allChildren;
+    }
+
+    // Apply filtering based on content model type
+    return this.getValidNextElementsInContentModel(contentModel, previousSibling, allChildren);
+  }
+
+  /**
+   * Special handling for do_if/do_elseif/do_else sequence filtering
+   * @param previousSibling The previous element (do_if, do_elseif, or do_else)
+   * @param allChildren All possible child elements
+   * @returns Valid next elements based on do_if sequence rules
+   */
+  private filterDoIfSequence(previousSibling: string, allChildren: Element[]): Element[] {
+    const doIf = allChildren.find(elem => elem.getAttribute('name') === 'do_if');
+    const doElseif = allChildren.find(elem => elem.getAttribute('name') === 'do_elseif');
+    const doElse = allChildren.find(elem => elem.getAttribute('name') === 'do_else');
+
+    if (previousSibling === 'do_if') {
+      // After do_if, only do_elseif or do_else are valid
+      const result = [];
+      if (doElseif) result.push(doElseif);
+      if (doElse) result.push(doElse);
+      return result;
+    } else if (previousSibling === 'do_elseif') {
+      // After do_elseif, another do_elseif or do_else are valid
+      const result = [];
+      if (doElseif) result.push(doElseif); // do_elseif can repeat
+      if (doElse) result.push(doElse);
+      return result;
+    } else if (previousSibling === 'do_else') {
+      // After do_else, the sequence ends - return all other actions except do_if/do_elseif/do_else
+      return allChildren.filter(elem => {
+        const name = elem.getAttribute('name');
+        return name && !['do_if', 'do_elseif', 'do_else'].includes(name);
+      });
+    }
+
+    return allChildren;
+  }
+
+  /**
+   * Find the content model (sequence/choice/all) within an element definition
+   * @param elementDef The element definition to search
+   * @returns The content model element, or null if not found
+   */
+  private findContentModel(elementDef: Element): Element | null {
+    const ns = 'xs:';
+
+    // Look for complexType first
+    for (let i = 0; i < elementDef.childNodes.length; i++) {
+      const child = elementDef.childNodes[i];
+      if (child.nodeType === 1 && (child as Element).nodeName === ns + 'complexType') {
+        const complexType = child as Element;
+
+        // Direct sequence/choice/all in complexType
+        const directModel = this.findDirectContentModel(complexType);
+        if (directModel) {
+          return directModel;
+        }
+      }
+    }
+
+    // Look for type reference and follow it
+    const typeAttr = elementDef.getAttribute('type');
+    if (typeAttr && !this.isBuiltInXsdType(typeAttr)) {
+      const typeDef = this.schemaIndex.types[typeAttr] || this.schemaIndex.types[typeAttr.replace(/^.*:/, '')];
+      if (typeDef) {
+        return this.findContentModel(typeDef);
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Find direct content model in a complexType, extension, or restriction
+   * @param parent The parent element to search in
+   * @returns The content model element, or null if not found
+   */
+  private findDirectContentModel(parent: Element): Element | null {
+    const ns = 'xs:';
+
+    for (let i = 0; i < parent.childNodes.length; i++) {
+      const child = parent.childNodes[i];
+      if (child.nodeType === 1) {
+        const element = child as Element;
+
+        // Direct sequence/choice/all
+        if (element.nodeName === ns + 'sequence' ||
+            element.nodeName === ns + 'choice' ||
+            element.nodeName === ns + 'all') {
+          return element;
+        }
+
+        // Look in extension/restriction
+        if (element.nodeName === ns + 'extension' || element.nodeName === ns + 'restriction') {
+          const nested = this.findDirectContentModel(element);
+          if (nested) {
+            return nested;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Get valid next elements based on content model and previous sibling
+   * @param contentModel The sequence/choice/all element
+   * @param previousSibling The name of the previous sibling
+   * @param allChildren All possible child elements for reference
+   * @returns Filtered elements that are valid as next elements
+   */
+  private getValidNextElementsInContentModel(contentModel: Element, previousSibling: string, allChildren: Element[]): Element[] {
+    const modelType = contentModel.nodeName;
+
+    if (modelType === 'xs:choice') {
+      return this.getValidNextInChoice(contentModel, previousSibling, allChildren);
+    } else if (modelType === 'xs:sequence') {
+      return this.getValidNextInSequence(contentModel, previousSibling, allChildren);
+    } else if (modelType === 'xs:all') {
+      // For xs:all, any unused element can come next
+      return allChildren; // Simplified - could be enhanced to track used elements
+    }
+
+    // Unknown model type, return all children
+    return allChildren;
+  }
+
+  /**
+   * Get valid next elements in a choice based on previous sibling
+   * @param choice The choice element
+   * @param previousSibling The name of the previous sibling
+   * @param allChildren All possible child elements for reference
+   * @returns Valid next elements
+   */
+  private getValidNextInChoice(choice: Element, previousSibling: string, allChildren: Element[]): Element[] {
+    // In a choice, any element from the choice can be used
+    // Check if the choice can repeat
+    const maxOccurs = choice.getAttribute('maxOccurs') || '1';
+
+    if (maxOccurs === 'unbounded' || parseInt(maxOccurs) > 1) {
+      // Choice can repeat, so all choice options are still valid
+      return this.getElementsInChoice(choice, allChildren);
+    } else {
+      // Choice used once, typically no more elements allowed from this choice
+      // But there might be subsequent elements after the choice in a parent sequence
+      return [];
+    }
+  }
+
+  /**
+   * Get valid next elements in a sequence based on previous sibling
+   * @param sequence The sequence element
+   * @param previousSibling The name of the previous sibling
+   * @param allChildren All possible child elements for reference
+   * @returns Valid next elements in the sequence
+   */
+  private getValidNextInSequence(sequence: Element, previousSibling: string, allChildren: Element[]): Element[] {
+    const sequenceItems: Element[] = [];
+
+    // Collect all sequence items (elements, choices, groups, etc.)
+    for (let i = 0; i < sequence.childNodes.length; i++) {
+      const child = sequence.childNodes[i];
+      if (child.nodeType === 1) {
+        sequenceItems.push(child as Element);
+      }
+    }
+
+    // Find the position of the previous sibling in the sequence
+    let previousPosition = -1;
+    let previousItem: Element | null = null;
+
+    for (let i = 0; i < sequenceItems.length; i++) {
+      const item = sequenceItems[i];
+
+      if (this.itemContainsElement(item, previousSibling)) {
+        previousPosition = i;
+        previousItem = item;
+        break;
+      }
+    }
+
+    if (previousPosition === -1) {
+      // Previous sibling not found in this sequence, return all children
+      return allChildren;
+    }
+
+    const validNext: Element[] = [];
+
+    // Special handling for sequences within choices (like do_if/do_elseif/do_else)
+    if (previousItem && previousItem.nodeName === 'xs:element') {
+      // If this is part of a do_if/do_elseif/do_else sequence, handle specially
+      const remainingInSequence = this.getRemainingElementsInInnerSequence(
+        previousItem, previousSibling, sequenceItems, previousPosition, allChildren
+      );
+
+      if (remainingInSequence.length > 0) {
+        return remainingInSequence;
+      }
+    }
+
+    // Check if the previous element can repeat
+    if (previousItem && this.itemCanRepeat(previousItem, previousSibling)) {
+      const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSibling);
+      if (repeatElement) {
+        validNext.push(repeatElement);
+      }
+    }
+
+    // Add elements that come after the previous position in the sequence
+    for (let i = previousPosition + 1; i < sequenceItems.length; i++) {
+      const nextItem = sequenceItems[i];
+      const itemElements = this.getElementsFromSequenceItem(nextItem, allChildren);
+      validNext.push(...itemElements);
+
+      // If this item is required (minOccurs >= 1), stop here
+      // If it's optional (minOccurs = 0), continue to the next items
+      const minOccurs = parseInt(nextItem.getAttribute('minOccurs') || '1');
+      if (minOccurs >= 1) {
+        break; // Required item found, stop here
+      }
+    }
+
+    return validNext;
+  }
+
+  /**
+   * Handle special case of sequences within choices (like do_if/do_elseif/do_else)
+   * @param previousItem The previous item in the sequence
+   * @param previousSibling The name of the previous sibling
+   * @param sequenceItems All items in the current sequence
+   * @param previousPosition Position of the previous item
+   * @param allChildren All possible child elements
+   * @returns Remaining valid elements in the inner sequence, or empty array if not applicable
+   */
+  private getRemainingElementsInInnerSequence(
+    previousItem: Element,
+    previousSibling: string,
+    sequenceItems: Element[],
+    previousPosition: number,
+    allChildren: Element[]
+  ): Element[] {
+    // Check if this is a do_if/do_elseif/do_else case
+    if (['do_if', 'do_elseif', 'do_else'].includes(previousSibling)) {
+      // Look for a sequence that contains do_if, do_elseif, do_else in the parent group/choice
+      // This would be from the actionchoice group structure
+
+      // Find the next items that would be valid after this element in the do_if sequence
+      if (previousSibling === 'do_if') {
+        // After do_if, only do_elseif or do_else are valid
+        const doElseif = allChildren.find(elem => elem.getAttribute('name') === 'do_elseif');
+        const doElse = allChildren.find(elem => elem.getAttribute('name') === 'do_else');
+        const result = [];
+        if (doElseif) result.push(doElseif);
+        if (doElse) result.push(doElse);
+        return result;
+      } else if (previousSibling === 'do_elseif') {
+        // After do_elseif, only another do_elseif or do_else are valid
+        const doElseif = allChildren.find(elem => elem.getAttribute('name') === 'do_elseif');
+        const doElse = allChildren.find(elem => elem.getAttribute('name') === 'do_else');
+        const result = [];
+        if (doElseif) result.push(doElseif); // do_elseif can repeat
+        if (doElse) result.push(doElse);
+        return result;
+      } else if (previousSibling === 'do_else') {
+        // After do_else, the sequence ends - no more do_if/do_elseif/do_else allowed
+        return [];
+      }
+    }
+
+    return []; // Not a special sequence case
+  }
+
+  /**
+   * Check if a sequence item (element, choice, group) contains the specified element
+   * @param item The sequence item to check
+   * @param elementName The element name to look for
+   * @returns True if the item contains the element
+   */
+  private itemContainsElement(item: Element, elementName: string): boolean {
+    const ns = 'xs:';
+
+    if (item.nodeName === ns + 'element') {
+      return item.getAttribute('name') === elementName;
+    } else if (item.nodeName === ns + 'choice') {
+      // Check if any element in the choice matches
+      return this.choiceContainsElement(item, elementName);
+    } else if (item.nodeName === ns + 'group') {
+      // Check if the group contains the element (simplified)
+      const groupName = item.getAttribute('ref');
+      if (groupName && this.schemaIndex.groups[groupName]) {
+        return this.itemContainsElement(this.schemaIndex.groups[groupName], elementName);
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Check if a choice contains the specified element
+   * @param choice The choice element
+   * @param elementName The element name to look for
+   * @returns True if the choice contains the element
+   */
+  private choiceContainsElement(choice: Element, elementName: string): boolean {
+    const ns = 'xs:';
+
+    for (let i = 0; i < choice.childNodes.length; i++) {
+      const child = choice.childNodes[i];
+      if (child.nodeType === 1) {
+        const element = child as Element;
+
+        if (element.nodeName === ns + 'element' && element.getAttribute('name') === elementName) {
+          return true;
+        } else if (element.nodeName === ns + 'choice') {
+          if (this.choiceContainsElement(element, elementName)) {
+            return true;
+          }
+        } else if (element.nodeName === ns + 'group') {
+          const groupName = element.getAttribute('ref');
+          if (groupName && this.schemaIndex.groups[groupName]) {
+            if (this.itemContainsElement(this.schemaIndex.groups[groupName], elementName)) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Check if a sequence item can repeat (for the specific element)
+   * @param item The sequence item
+   * @param elementName The element name
+   * @returns True if the element can repeat
+   */
+  private itemCanRepeat(item: Element, elementName: string): boolean {
+    const ns = 'xs:';
+
+    if (item.nodeName === ns + 'element' && item.getAttribute('name') === elementName) {
+      const maxOccurs = item.getAttribute('maxOccurs') || '1';
+      return maxOccurs === 'unbounded' || parseInt(maxOccurs) > 1;
+    } else if (item.nodeName === ns + 'choice') {
+      // For choice, check if the choice itself can repeat
+      const maxOccurs = item.getAttribute('maxOccurs') || '1';
+      return maxOccurs === 'unbounded' || parseInt(maxOccurs) > 1;
+    }
+
+    return false;
+  }
+
+  /**
+   * Get elements from a sequence item (element, choice, group)
+   * @param item The sequence item
+   * @param allChildren All possible child elements for reference
+   * @returns Array of elements from the item
+   */
+  private getElementsFromSequenceItem(item: Element, allChildren: Element[]): Element[] {
+    const ns = 'xs:';
+
+    if (item.nodeName === ns + 'element') {
+      const elementName = item.getAttribute('name');
+      if (elementName) {
+        const element = allChildren.find(elem => elem.getAttribute('name') === elementName);
+        return element ? [element] : [];
+      }
+    } else if (item.nodeName === ns + 'choice') {
+      return this.getElementsInChoice(item, allChildren);
+    } else if (item.nodeName === ns + 'sequence') {
+      // Handle nested sequence (like the do_if/do_elseif/do_else sequence)
+      const sequenceElements: Element[] = [];
+      for (let i = 0; i < item.childNodes.length; i++) {
+        const child = item.childNodes[i];
+        if (child.nodeType === 1) {
+          const childElements = this.getElementsFromSequenceItem(child as Element, allChildren);
+          sequenceElements.push(...childElements);
+        }
+      }
+      return sequenceElements;
+    } else if (item.nodeName === ns + 'group') {
+      const groupName = item.getAttribute('ref');
+      if (groupName && this.schemaIndex.groups[groupName]) {
+        return this.getElementsFromSequenceItem(this.schemaIndex.groups[groupName], allChildren);
+      }
+    }
+
+    return [];
+  }
+
+  /**
+   * Get all elements within a choice
+   * @param choice The choice element
+   * @param allChildren All possible child elements for reference
+   * @returns Array of elements that are options in the choice
+   */
+  private getElementsInChoice(choice: Element, allChildren: Element[]): Element[] {
+    const ns = 'xs:';
+    const choiceElements: Element[] = [];
+
+    for (let i = 0; i < choice.childNodes.length; i++) {
+      const child = choice.childNodes[i];
+      if (child.nodeType === 1) {
+        const element = child as Element;
+
+        if (element.nodeName === ns + 'element') {
+          const elementName = element.getAttribute('name');
+          if (elementName) {
+            const foundElement = allChildren.find(elem => elem.getAttribute('name') === elementName);
+            if (foundElement) {
+              choiceElements.push(foundElement);
+            }
+          }
+        } else if (element.nodeName === ns + 'choice') {
+          // Nested choice
+          choiceElements.push(...this.getElementsInChoice(element, allChildren));
+        } else if (element.nodeName === ns + 'sequence') {
+          // Handle sequence within choice - for do_if/do_elseif/do_else case
+          choiceElements.push(...this.getElementsFromSequenceItem(element, allChildren));
+        } else if (element.nodeName === ns + 'group') {
+          // Group reference within choice
+          const groupName = element.getAttribute('ref');
+          if (groupName && this.schemaIndex.groups[groupName]) {
+            choiceElements.push(...this.getElementsFromSequenceItem(this.schemaIndex.groups[groupName], allChildren));
+          }
+        }
+      }
+    }
+
+    return choiceElements;
+  }
+
+  /**
+   * Check if a type name is a built-in XSD type
+   * @param typeName The type name to check
+   * @returns True if it's a built-in type
+   */
+  private isBuiltInXsdType(typeName: string): boolean {
+    const builtInTypes = [
+      'string', 'int', 'integer', 'decimal', 'boolean', 'date', 'time', 'dateTime',
+      'duration', 'float', 'double', 'anyURI', 'QName', 'NOTATION'
+    ];
+
+    const localName = typeName.includes(':') ? typeName.split(':')[1] : typeName;
+    return builtInTypes.includes(localName);
   }
 
   /**

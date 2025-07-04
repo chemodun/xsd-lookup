@@ -476,15 +476,16 @@ export class XsdReference {
    * @param schemaName The schema to use
    * @param elementName The parent element name
    * @param hierarchy The element hierarchy in bottom-up order (parent → root)
+   * @param previousSibling Optional previous sibling element name to filter results based on sequence constraints
    * @returns Map where key is child element name and value is its annotation text
    */
-  public getPossibleChildElements(schemaName: string, elementName: string, hierarchy: string[] = []): Map<string, string> {
+  public getPossibleChildElements(schemaName: string, elementName: string, hierarchy: string[] = [], previousSibling?: string): Map<string, string> {
     const schema = this.loadSchema(schemaName);
     if (!schema) {
       return new Map<string, string>();
     }
 
-    return schema.getPossibleChildElements(elementName, hierarchy);
+    return schema.getPossibleChildElements(elementName, hierarchy, previousSibling);
   }
 
   /**
