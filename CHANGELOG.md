@@ -2,11 +2,9 @@
 
 ## [1.5.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.5.0...xsd-lookup@v1.5.1) (2025-07-22)
 
-
 ### Bug Fixes
 
 * fix validation logic to support inline enumeration type definitions ([5f8beb6](https://github.com/chemodun/xsd-lookup/commit/5f8beb6351dc822278278ef48ed8a8bc080651fd))
-
 
 ### Miscellaneous Chores
 
