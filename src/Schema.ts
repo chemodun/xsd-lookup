@@ -1210,7 +1210,7 @@ export class Schema {
         // Check for inline type definition (xs:simpleType)
         const inlineTypeValidation = this.getInlineTypeValidationInfo(attr.node);
         Object.assign(enhancedAttr, inlineTypeValidation);
-        
+
         // If we found inline enumeration values, set the type to indicate it's an enumeration
         if (inlineTypeValidation.enumValues && inlineTypeValidation.enumValues.length > 0) {
           enhancedAttr.type = 'enumeration';
@@ -1344,15 +1344,15 @@ export class Schema {
       const child = attributeNode.childNodes[i];
       if (child.nodeType === 1 && (child as Element).nodeName === ns + 'simpleType') {
         const simpleTypeNode = child as Element;
-        
+
         // Extract validation rules from the inline simpleType
         this.extractValidationRulesFromNode(simpleTypeNode, validationInfo);
-        
+
         // Extract enum value annotations if we have enumeration values
         if (validationInfo.enumValues && validationInfo.enumValues.length > 0) {
           validationInfo.enumValuesAnnotations = this.extractEnumValueAnnotations(simpleTypeNode);
         }
-        
+
         break; // Found the simpleType, no need to continue
       }
     }
