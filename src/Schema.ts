@@ -1202,10 +1202,19 @@ export class Schema {
         enhancedAttr.annotation = annotation;
       }
 
-      // If the attribute has a type, get comprehensive validation information
+      // If the attribute has a type reference, get comprehensive validation information
       if (enhancedAttr.type) {
         const typeValidation = this.getTypeValidationInfo(enhancedAttr.type);
         Object.assign(enhancedAttr, typeValidation);
+      } else {
+        // Check for inline type definition (xs:simpleType)
+        const inlineTypeValidation = this.getInlineTypeValidationInfo(attr.node);
+        Object.assign(enhancedAttr, inlineTypeValidation);
+        
+        // If we found inline enumeration values, set the type to indicate it's an enumeration
+        if (inlineTypeValidation.enumValues && inlineTypeValidation.enumValues.length > 0) {
+          enhancedAttr.type = 'enumeration';
+        }
       }
 
       return enhancedAttr;
@@ -1225,67 +1234,8 @@ export class Schema {
     const extractValidationRules = (node: Element): void => {
       if (!node || node.nodeType !== 1) return;
 
-      // Extract enumeration values
-      if (node.nodeName === ns + 'enumeration') {
-        const value = node.getAttribute('value');
-        if (value) {
-          if (!validationInfo.enumValues) validationInfo.enumValues = [];
-          validationInfo.enumValues.push(value);
-        }
-      }
-
-      // Extract pattern restrictions
-      if (node.nodeName === ns + 'pattern') {
-        const pattern = node.getAttribute('value');
-        if (pattern) {
-          if (!validationInfo.patterns) validationInfo.patterns = [];
-          validationInfo.patterns.push(pattern);
-        }
-      }
-
-      // Extract length restrictions
-      if (node.nodeName === ns + 'minLength') {
-        const minLength = parseInt(node.getAttribute('value') || '0', 10);
-        if (!isNaN(minLength)) {
-          validationInfo.minLength = minLength;
-        }
-      }
-
-      if (node.nodeName === ns + 'maxLength') {
-        const maxLength = parseInt(node.getAttribute('value') || '0', 10);
-        if (!isNaN(maxLength)) {
-          validationInfo.maxLength = maxLength;
-        }
-      }
-
-      // Extract numeric range restrictions
-      if (node.nodeName === ns + 'minInclusive') {
-        const minInclusive = parseFloat(node.getAttribute('value') || '0');
-        if (!isNaN(minInclusive)) {
-          validationInfo.minInclusive = minInclusive;
-        }
-      }
-
-      if (node.nodeName === ns + 'maxInclusive') {
-        const maxInclusive = parseFloat(node.getAttribute('value') || '0');
-        if (!isNaN(maxInclusive)) {
-          validationInfo.maxInclusive = maxInclusive;
-        }
-      }
-
-      if (node.nodeName === ns + 'minExclusive') {
-        const minExclusive = parseFloat(node.getAttribute('value') || '0');
-        if (!isNaN(minExclusive)) {
-          validationInfo.minExclusive = minExclusive;
-        }
-      }
-
-      if (node.nodeName === ns + 'maxExclusive') {
-        const maxExclusive = parseFloat(node.getAttribute('value') || '0');
-        if (!isNaN(maxExclusive)) {
-          validationInfo.maxExclusive = maxExclusive;
-        }
-      }
+      // Use the reusable validation rule extraction
+      this.extractValidationRulesFromNode(node, validationInfo);
 
       // Handle inheritance: if this is a restriction with a base type, inherit from base
       if (node.nodeName === ns + 'restriction') {
@@ -1363,7 +1313,7 @@ export class Schema {
         }
       }
 
-      // Recursively search child nodes
+      // Recursively search child nodes (but skip the base validation rules since we use extractValidationRulesFromNode now)
       for (let i = 0; i < node.childNodes.length; i++) {
         const child = node.childNodes[i];
         if (child.nodeType === 1) {
@@ -1380,6 +1330,113 @@ export class Schema {
     }
 
     return validationInfo;
+  }
+
+  /**
+   * Get validation information from inline type definitions (xs:simpleType within attribute)
+   */
+  private getInlineTypeValidationInfo(attributeNode: Element): Partial<EnhancedAttributeInfo> {
+    const validationInfo: Partial<EnhancedAttributeInfo> = {};
+    const ns = 'xs:';
+
+    // Look for inline xs:simpleType definition within the attribute node
+    for (let i = 0; i < attributeNode.childNodes.length; i++) {
+      const child = attributeNode.childNodes[i];
+      if (child.nodeType === 1 && (child as Element).nodeName === ns + 'simpleType') {
+        const simpleTypeNode = child as Element;
+        
+        // Extract validation rules from the inline simpleType
+        this.extractValidationRulesFromNode(simpleTypeNode, validationInfo);
+        
+        // Extract enum value annotations if we have enumeration values
+        if (validationInfo.enumValues && validationInfo.enumValues.length > 0) {
+          validationInfo.enumValuesAnnotations = this.extractEnumValueAnnotations(simpleTypeNode);
+        }
+        
+        break; // Found the simpleType, no need to continue
+      }
+    }
+
+    return validationInfo;
+  }
+
+  /**
+   * Extract validation rules from a node (reusable logic)
+   */
+  private extractValidationRulesFromNode(node: Element, validationInfo: Partial<EnhancedAttributeInfo>): void {
+    if (!node || node.nodeType !== 1) return;
+
+    const ns = 'xs:';
+
+    // Extract enumeration values
+    if (node.nodeName === ns + 'enumeration') {
+      const value = node.getAttribute('value');
+      if (value) {
+        if (!validationInfo.enumValues) validationInfo.enumValues = [];
+        validationInfo.enumValues.push(value);
+      }
+    }
+
+    // Extract pattern restrictions
+    if (node.nodeName === ns + 'pattern') {
+      const pattern = node.getAttribute('value');
+      if (pattern) {
+        if (!validationInfo.patterns) validationInfo.patterns = [];
+        validationInfo.patterns.push(pattern);
+      }
+    }
+
+    // Extract length restrictions
+    if (node.nodeName === ns + 'minLength') {
+      const minLength = parseInt(node.getAttribute('value') || '0', 10);
+      if (!isNaN(minLength)) {
+        validationInfo.minLength = minLength;
+      }
+    }
+
+    if (node.nodeName === ns + 'maxLength') {
+      const maxLength = parseInt(node.getAttribute('value') || '0', 10);
+      if (!isNaN(maxLength)) {
+        validationInfo.maxLength = maxLength;
+      }
+    }
+
+    // Extract numeric range restrictions
+    if (node.nodeName === ns + 'minInclusive') {
+      const minInclusive = parseFloat(node.getAttribute('value') || '0');
+      if (!isNaN(minInclusive)) {
+        validationInfo.minInclusive = minInclusive;
+      }
+    }
+
+    if (node.nodeName === ns + 'maxInclusive') {
+      const maxInclusive = parseFloat(node.getAttribute('value') || '0');
+      if (!isNaN(maxInclusive)) {
+        validationInfo.maxInclusive = maxInclusive;
+      }
+    }
+
+    if (node.nodeName === ns + 'minExclusive') {
+      const minExclusive = parseFloat(node.getAttribute('value') || '0');
+      if (!isNaN(minExclusive)) {
+        validationInfo.minExclusive = minExclusive;
+      }
+    }
+
+    if (node.nodeName === ns + 'maxExclusive') {
+      const maxExclusive = parseFloat(node.getAttribute('value') || '0');
+      if (!isNaN(maxExclusive)) {
+        validationInfo.maxExclusive = maxExclusive;
+      }
+    }
+
+    // Recursively search child nodes for validation rules (but not inheritance/union logic)
+    for (let i = 0; i < node.childNodes.length; i++) {
+      const child = node.childNodes[i];
+      if (child.nodeType === 1) {
+        this.extractValidationRulesFromNode(child as Element, validationInfo);
+      }
+    }
   }
 
   /**

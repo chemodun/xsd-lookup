@@ -324,6 +324,9 @@ export class XsdReference {
         isPatternsMatched = false;
         violatedRules.push(`Value must match pattern(s): ${attribute.patterns.join(' or ')}`);
       }
+    } else {
+      // If no patterns defined, treat it as not matched for enumeration checks
+      isPatternsMatched = ! (attribute.enumValues && attribute.enumValues.length > 0);
     }
 
 

@@ -136,3 +136,6 @@ dist
 .pnp.*
 
 test-results
+
+# Temporary folder for testing
+temp/
