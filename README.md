@@ -14,6 +14,7 @@ Developed to support scripting language validation in **X4: Foundations** game m
 - **🔄 Previous Sibling Context**: Optional previous sibling element name to filter results based on sequence constraints
 - **🔀 Union Type Processing**: Merges validation rules from multiple member types
 - **📋 Enumeration Support**: Complete enumeration value extraction and validation with annotations
+- **🎯 SimpleType Enumeration Discovery**: Extract enumeration values from named SimpleTypes, including union types
 - **📏 Range Validation**: Numeric and length constraint validation
 - **🗂️ Multi-line Normalization**: Handles multi-line XML attribute values correctly
 - **📈 Performance Optimized**: Caching and indexing for fast validation
@@ -48,6 +49,12 @@ console.log(`Possible values for 'operation': ${Array.from(attributeValues.keys(
 
 const checkAttributeValue = xsdRef.validateAttributeValueAgainstRules(elementAttributes, 'operation', 'unknown');
 console.log(`Attribute 'operation' value 'unknown' is ${checkAttributeValue.isValid ? 'valid' : 'invalid'}.`);
+
+// Get enumeration values from SimpleType definitions
+const classEnums = xsdRef.getSimpleTypeEnumerationValues('common', 'classlookup');
+if (classEnums) {
+  console.log(`Found ${classEnums.values.length} class types: ${classEnums.values.slice(0, 3).join(', ')}...`);
+}
 
 // Clean up resources when done (optional but recommended)
 xsdRef.dispose();
@@ -283,6 +290,57 @@ const derivedTypes: string[] = xsdRef.getSimpleTypesWithBaseType('aiscripts', 'l
 // Find all types based on xs:string
 const stringTypes: string[] = xsdRef.getSimpleTypesWithBaseType('common', 'xs:string');
 // Returns: ['name', 'comment', 'text', ...] (string-based types)
+```
+
+##### `getSimpleTypeEnumerationValues(schemaName: string, simpleTypeName: string): { values: string[], annotations: Map<string, string> } | null`
+
+Get enumeration values for a named SimpleType, including support for union types.
+
+**Union Type Support**: This method properly handles union types by extracting enumeration values from all member types and combining them into a single result.
+
+```typescript
+// Get enumeration values from a simple enumeration type
+const quadrantResult = xsdRef.getSimpleTypeEnumerationValues('common', 'quadrantlookup');
+// Returns:
+// {
+//   values: ['quadrant.none', 'quadrant.front', 'quadrant.back'],
+//   annotations: Map {
+//     'quadrant.none' => 'No specific quadrant',
+//     'quadrant.front' => 'Front quadrant',
+//     'quadrant.back' => 'Back quadrant'
+//   }
+// }
+
+// Get enumeration values from a union type (combines multiple enumerations)
+const classResult = xsdRef.getSimpleTypeEnumerationValues('common', 'classlookup');
+// Returns:
+// {
+//   values: ['class.component', 'class.buildprocessor', 'class.ship', 'class.station', ...],
+//   annotations: Map {
+//     'class.component' => 'Component',
+//     'class.buildprocessor' => 'Build processor',
+//     'class.ship' => 'Ship',
+//     // ... 80+ values from union of 'positionalclasslookup' and 'expression' types
+//   }
+// }
+
+// Handle non-existent or non-enumeration types
+const nonExistent = xsdRef.getSimpleTypeEnumerationValues('common', 'nonexistent');
+// Returns: null
+
+// Usage example:
+if (classResult) {
+  console.log(`Found ${classResult.values.length} enumeration values`);
+  for (const value of classResult.values) {
+    const annotation = classResult.annotations.get(value);
+    console.log(`  ${value}: ${annotation || '(no description)'}`);
+  }
+  
+  // Check if a specific value exists
+  if (classResult.values.includes('class.ship')) {
+    console.log('class.ship is a valid enumeration value');
+  }
+}
 ```
 
 ##### `dispose(): void`
