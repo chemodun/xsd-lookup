@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.6.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.5.1...xsd-lookup@v1.6.0) (2025-07-23)
+
+
+### Features
+
+* add getSimpleTypeEnumerationValues method to retrieve enumeration values and annotations for SimpleTypes ([b78e61c](https://github.com/chemodun/xsd-lookup/commit/b78e61c13ce763be8d48404bbf1d0100ff055c0f))
+
+
+### Documentation
+
+* add documentation for getSimpleTypeEnumerationValues method and its usage examples ([18af350](https://github.com/chemodun/xsd-lookup/commit/18af3507c42ad70b3fdecaa1b445f0c39d7e19d3))
+
 ## [1.5.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.5.0...xsd-lookup@v1.5.1) (2025-07-22)
 
 ### Bug Fixes
