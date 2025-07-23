@@ -2646,6 +2646,81 @@ export class Schema {
   }
 
   /**
+   * Get enumeration values for a named SimpleType
+   * @param simpleTypeName The name of the SimpleType to get enumeration values from
+   * @returns Object containing enumeration values and their annotations, or null if not found or not an enumeration
+   */
+  public getSimpleTypeEnumerationValues(simpleTypeName: string): {
+    values: string[],
+    annotations: Map<string, string>
+  } | null {
+    // Look up the type in the schema index
+    const typeNode = this.schemaIndex.types[simpleTypeName];
+    if (!typeNode) {
+      return null; // Type not found
+    }
+
+    // Check if this is a simpleType
+    const ns = 'xs:';
+    if (typeNode.nodeName !== ns + 'simpleType') {
+      return null; // Not a simple type
+    }
+
+    // Extract enumeration values from the simple type, including union member types
+    const allEnumValues: string[] = [];
+    const allAnnotations = new Map<string, string>();
+
+    // First, try to extract direct enumeration values
+    const validationInfo: Partial<EnhancedAttributeInfo> = {};
+    this.extractValidationRulesFromNode(typeNode, validationInfo);
+
+    if (validationInfo.enumValues && validationInfo.enumValues.length > 0) {
+      allEnumValues.push(...validationInfo.enumValues);
+      const directAnnotations = this.extractEnumValueAnnotations(typeNode);
+      for (const [key, value] of directAnnotations) {
+        allAnnotations.set(key, value);
+      }
+    }
+
+    // Check for union types and extract enumeration values from member types
+    const unions = this.findChildElements(typeNode, ns + 'union');
+    for (const union of unions) {
+      const memberTypes = union.getAttribute('memberTypes');
+      if (memberTypes) {
+        const typeNames = memberTypes.trim().split(/\s+/);
+        for (const memberTypeName of typeNames) {
+          if (memberTypeName) {
+            // Recursively get enumeration values from member types
+            const memberEnumResult = this.getSimpleTypeEnumerationValues(memberTypeName);
+            if (memberEnumResult) {
+              // Add unique values only
+              for (const value of memberEnumResult.values) {
+                if (!allEnumValues.includes(value)) {
+                  allEnumValues.push(value);
+                }
+              }
+              // Add annotations
+              for (const [key, value] of memberEnumResult.annotations) {
+                allAnnotations.set(key, value);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Check if we found any enumeration values
+    if (allEnumValues.length === 0) {
+      return null; // No enumeration values found
+    }
+
+    return {
+      values: allEnumValues,
+      annotations: allAnnotations
+    };
+  }
+
+  /**
    * Clear all caches and resources
    */
   public dispose(): void {

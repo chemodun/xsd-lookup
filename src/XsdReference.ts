@@ -455,6 +455,24 @@ export class XsdReference {
   }
 
   /**
+   * Get enumeration values for a named SimpleType
+   * @param schemaName The schema name to search in
+   * @param simpleTypeName The name of the SimpleType to get enumeration values from
+   * @returns Object containing enumeration values and their annotations, or null if not found or not an enumeration
+   */
+  public getSimpleTypeEnumerationValues(
+    schemaName: string, 
+    simpleTypeName: string
+  ): { values: string[], annotations: Map<string, string> } | null {
+    const schema = this.loadSchema(schemaName);
+    if (!schema) {
+      return null;
+    }
+
+    return schema.getSimpleTypeEnumerationValues(simpleTypeName);
+  }
+
+  /**
    * Check if an attribute name is an XML infrastructure attribute that should be ignored
    * @param attributeName The attribute name to check
    * @returns True if it's an infrastructure attribute (xmlns, xsi, etc.)
