@@ -2157,8 +2157,18 @@ export class Schema {
     for (const element of filteredElements) {
       const name = element.getAttribute('name');
       if (name) {
-        const annotation = Schema.extractAnnotationText(element) || '';
-        result.set(name, annotation);
+        let annotation = Schema.extractAnnotationText(element);
+        // If no direct annotation, try to get it from the element's type
+        if (!annotation) {
+          const typeName = element.getAttribute('type');
+          if (typeName) {
+            const typeDef = this.schemaIndex.types[typeName];
+            if (typeDef) {
+              annotation = Schema.extractAnnotationText(typeDef);
+            }
+          }
+        }
+        result.set(name, annotation || '');
       }
     }
 
