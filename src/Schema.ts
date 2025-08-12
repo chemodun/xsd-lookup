@@ -2184,11 +2184,6 @@ export class Schema {
    * @returns Filtered array of elements that are valid as next elements
    */
   private filterElementsBySequenceConstraints(elementDef: Element, allChildren: Element[], previousSibling: string): Element[] {
-    // For do_if/do_elseif/do_else special case, handle directly
-    if (['do_if', 'do_elseif', 'do_else'].includes(previousSibling)) {
-      return this.filterDoIfSequence(previousSibling, allChildren);
-    }
-
     // Find the content model (sequence/choice) within the element definition
     const contentModel = this.findContentModel(elementDef);
 
@@ -2201,39 +2196,8 @@ export class Schema {
     return this.getValidNextElementsInContentModel(contentModel, previousSibling, allChildren);
   }
 
-  /**
-   * Special handling for do_if/do_elseif/do_else sequence filtering
-   * @param previousSibling The previous element (do_if, do_elseif, or do_else)
-   * @param allChildren All possible child elements
-   * @returns Valid next elements based on do_if sequence rules
-   */
-  private filterDoIfSequence(previousSibling: string, allChildren: Element[]): Element[] {
-    const doIf = allChildren.find(elem => elem.getAttribute('name') === 'do_if');
-    const doElseif = allChildren.find(elem => elem.getAttribute('name') === 'do_elseif');
-    const doElse = allChildren.find(elem => elem.getAttribute('name') === 'do_else');
-
-    if (previousSibling === 'do_if') {
-      // After do_if, only do_elseif or do_else are valid
-      const result = [];
-      if (doElseif) result.push(doElseif);
-      if (doElse) result.push(doElse);
-      return result;
-    } else if (previousSibling === 'do_elseif') {
-      // After do_elseif, another do_elseif or do_else are valid
-      const result = [];
-      if (doElseif) result.push(doElseif); // do_elseif can repeat
-      if (doElse) result.push(doElse);
-      return result;
-    } else if (previousSibling === 'do_else') {
-      // After do_else, the sequence ends - return all other actions except do_if/do_elseif/do_else
-      return allChildren.filter(elem => {
-        const name = elem.getAttribute('name');
-        return name && !['do_if', 'do_elseif', 'do_else'].includes(name);
-      });
-    }
-
-    return allChildren;
-  }
+  // Note: Sequence and choice handling is fully data-driven from the XSD; no element-name
+  // special-casing is implemented here.
 
   /**
    * Find the content model (sequence/choice/all) within an element definition
@@ -2296,6 +2260,20 @@ export class Schema {
             return nested;
           }
         }
+
+        // Follow group references to find underlying content model
+        if (element.nodeName === ns + 'group') {
+          const ref = element.getAttribute('ref');
+          if (ref) {
+            const groupDef = this.schemaIndex.groups[ref];
+            if (groupDef) {
+              const nested = this.findDirectContentModel(groupDef);
+              if (nested) {
+                return nested;
+              }
+            }
+          }
+        }
       }
     }
 
@@ -2333,18 +2311,14 @@ export class Schema {
    * @returns Valid next elements
    */
   private getValidNextInChoice(choice: Element, previousSibling: string, allChildren: Element[]): Element[] {
-    // In a choice, any element from the choice can be used
-    // Check if the choice can repeat
-    const maxOccurs = choice.getAttribute('maxOccurs') || '1';
-
-    if (maxOccurs === 'unbounded' || parseInt(maxOccurs) > 1) {
-      // Choice can repeat, so all choice options are still valid
-      return this.getElementsInChoice(choice, allChildren);
-    } else {
-      // Choice used once, typically no more elements allowed from this choice
-      // But there might be subsequent elements after the choice in a parent sequence
-      return [];
+    // If previousSibling belongs to a nested sequence option within this choice, continue that inner sequence only.
+    const nestedSeq = this.findNestedSequenceContainingElement(choice, previousSibling);
+    if (nestedSeq) {
+      return this.getValidNextInSequence(nestedSeq, previousSibling, allChildren, true);
     }
+
+    // Otherwise, we are at the start of a choice occurrence; return only the start elements of each alternative.
+    return this.getElementsInChoice(choice, allChildren);
   }
 
   /**
@@ -2354,7 +2328,7 @@ export class Schema {
    * @param allChildren All possible child elements for reference
    * @returns Valid next elements in the sequence
    */
-  private getValidNextInSequence(sequence: Element, previousSibling: string, allChildren: Element[]): Element[] {
+  private getValidNextInSequence(sequence: Element, previousSibling: string, allChildren: Element[], suppressFallback: boolean = false): Element[] {
     const sequenceItems: Element[] = [];
 
     // Collect all sequence items (elements, choices, groups, etc.)
@@ -2386,9 +2360,14 @@ export class Schema {
 
     const validNext: Element[] = [];
 
-    // Special handling for sequences within choices (like do_if/do_elseif/do_else)
+    // If the previous item is a choice, compute the valid next based on that choice context.
+    if (previousItem && previousItem.nodeName === 'xs:choice') {
+      const choiceNext = this.getValidNextInChoice(previousItem, previousSibling, allChildren);
+      validNext.push(...choiceNext);
+    }
+
+    // Handle potential inner content model defined by the previous element's type
     if (previousItem && previousItem.nodeName === 'xs:element') {
-      // If this is part of a do_if/do_elseif/do_else sequence, handle specially
       const remainingInSequence = this.getRemainingElementsInInnerSequence(
         previousItem, previousSibling, sequenceItems, previousPosition, allChildren
       );
@@ -2420,11 +2399,38 @@ export class Schema {
       }
     }
 
+  // If all following items are optional (no required items encountered), then
+    // after prioritizing these optional next items, allow any other elements
+    // from the upper-level choice (i.e., allChildren minus those already suggested).
+    let hasRequiredAfter = false;
+    for (let i = previousPosition + 1; i < sequenceItems.length; i++) {
+      const minOccurs = parseInt(sequenceItems[i].getAttribute('minOccurs') || '1');
+      if (minOccurs >= 1) {
+        hasRequiredAfter = true;
+        break;
+      }
+    }
+
+    if (!hasRequiredAfter && !suppressFallback) {
+      // Allow other alternatives from the same choice (start elements only), not every child.
+      if (previousItem && previousItem.nodeName === 'xs:choice') {
+        const startOptions = this.getElementsInChoice(previousItem, allChildren);
+        const existing = new Set(validNext.map(e => e.getAttribute('name') || ''));
+        for (const child of startOptions) {
+          const name = child.getAttribute('name') || '';
+          if (!existing.has(name)) {
+            validNext.push(child);
+          }
+        }
+      }
+    }
+
     return validNext;
   }
 
   /**
-   * Handle special case of sequences within choices (like do_if/do_elseif/do_else)
+   * Handle continuation when the previous element defines an inner content model.
+   * Returns the start-capable elements of that inner model, respecting min/maxOccurs.
    * @param previousItem The previous item in the sequence
    * @param previousSibling The name of the previous sibling
    * @param sequenceItems All items in the current sequence
@@ -2439,35 +2445,78 @@ export class Schema {
     previousPosition: number,
     allChildren: Element[]
   ): Element[] {
-    // Check if this is a do_if/do_elseif/do_else case
-    if (['do_if', 'do_elseif', 'do_else'].includes(previousSibling)) {
-      // Look for a sequence that contains do_if, do_elseif, do_else in the parent group/choice
-      // This would be from the actionchoice group structure
+    // Generic handling: if the previous item defines its own inner content model (sequence/choice/all),
+    // propose the initial elements of that inner model. If those inner elements are all optional,
+    // append other allowed elements from the parent level after prioritizing the inner ones.
+    const ns = 'xs:';
 
-      // Find the next items that would be valid after this element in the do_if sequence
-      if (previousSibling === 'do_if') {
-        // After do_if, only do_elseif or do_else are valid
-        const doElseif = allChildren.find(elem => elem.getAttribute('name') === 'do_elseif');
-        const doElse = allChildren.find(elem => elem.getAttribute('name') === 'do_else');
-        const result = [];
-        if (doElseif) result.push(doElseif);
-        if (doElse) result.push(doElse);
-        return result;
-      } else if (previousSibling === 'do_elseif') {
-        // After do_elseif, only another do_elseif or do_else are valid
-        const doElseif = allChildren.find(elem => elem.getAttribute('name') === 'do_elseif');
-        const doElse = allChildren.find(elem => elem.getAttribute('name') === 'do_else');
-        const result = [];
-        if (doElseif) result.push(doElseif); // do_elseif can repeat
-        if (doElse) result.push(doElse);
-        return result;
-      } else if (previousSibling === 'do_else') {
-        // After do_else, the sequence ends - no more do_if/do_elseif/do_else allowed
-        return [];
+    if (previousItem.nodeName === ns + 'element') {
+      const innerModel = this.findContentModel(previousItem);
+      if (!innerModel) return [];
+
+      const prioritized: Element[] = [];
+      let innerHasRequiredFirst = false;
+
+      if (innerModel.nodeName === ns + 'sequence') {
+        // Collect starting elements of the inner sequence, respecting minOccurs
+        for (let i = 0; i < innerModel.childNodes.length; i++) {
+          const child = innerModel.childNodes[i];
+          if (child.nodeType === 1) {
+            const item = child as Element;
+            const elems = this.getElementsFromSequenceItem(item, allChildren);
+            prioritized.push(...elems);
+            const minOccurs = parseInt(item.getAttribute('minOccurs') || '1');
+            if (minOccurs >= 1) {
+              innerHasRequiredFirst = true;
+              break; // Stop at first required inner item
+            }
+          }
+        }
+      } else if (innerModel.nodeName === ns + 'choice') {
+        prioritized.push(...this.getElementsInChoice(innerModel, allChildren));
+        // In a choice, typically one option is required unless minOccurs=0 on the choice itself
+        innerHasRequiredFirst = parseInt(innerModel.getAttribute('minOccurs') || '1') >= 1;
+      } else if (innerModel.nodeName === ns + 'all') {
+        // For xs:all, any element can appear; treat as optional set
+        for (let i = 0; i < innerModel.childNodes.length; i++) {
+          const child = innerModel.childNodes[i];
+          if (child.nodeType === 1) {
+            const item = child as Element;
+            const elems = this.getElementsFromSequenceItem(item, allChildren);
+            prioritized.push(...elems);
+          }
+        }
+        innerHasRequiredFirst = false;
       }
+
+      // De-duplicate prioritized while preserving order
+      const seen = new Set<string>();
+      const dedupPrioritized = prioritized.filter(e => {
+        const name = e.getAttribute('name') || '';
+        if (seen.has(name)) return false;
+        seen.add(name);
+        return true;
+      });
+
+      if (dedupPrioritized.length === 0) return [];
+
+      // If inner start is all optional, append other elements from parent level
+      if (!innerHasRequiredFirst) {
+        const result = [...dedupPrioritized];
+        const existing = new Set(result.map(e => e.getAttribute('name') || ''));
+        for (const child of allChildren) {
+          const name = child.getAttribute('name') || '';
+          if (!existing.has(name)) {
+            result.push(child);
+          }
+        }
+        return result;
+      }
+
+      return dedupPrioritized;
     }
 
-    return []; // Not a special sequence case
+    return [];
   }
 
   /**
@@ -2484,6 +2533,17 @@ export class Schema {
     } else if (item.nodeName === ns + 'choice') {
       // Check if any element in the choice matches
       return this.choiceContainsElement(item, elementName);
+    } else if (item.nodeName === ns + 'sequence') {
+      // Check any child of the sequence
+      for (let i = 0; i < item.childNodes.length; i++) {
+        const child = item.childNodes[i];
+        if (child.nodeType === 1) {
+          if (this.itemContainsElement(child as Element, elementName)) {
+            return true;
+          }
+        }
+      }
+      return false;
     } else if (item.nodeName === ns + 'group') {
       // Check if the group contains the element (simplified)
       const groupName = item.getAttribute('ref');
@@ -2493,6 +2553,27 @@ export class Schema {
     }
 
     return false;
+  }
+
+  /**
+   * Find a nested sequence within a choice that contains the specified element
+   */
+  private findNestedSequenceContainingElement(root: Element, elementName: string): Element | null {
+    const ns = 'xs:';
+    const stack: Element[] = [root];
+    while (stack.length) {
+      const node = stack.pop()!;
+      if (node.nodeName === ns + 'sequence' && this.itemContainsElement(node, elementName)) {
+        return node;
+      }
+      for (let i = 0; i < node.childNodes.length; i++) {
+        const child = node.childNodes[i];
+        if (child.nodeType === 1) {
+          stack.push(child as Element);
+        }
+      }
+    }
+    return null;
   }
 
   /**
@@ -2568,16 +2649,8 @@ export class Schema {
     } else if (item.nodeName === ns + 'choice') {
       return this.getElementsInChoice(item, allChildren);
     } else if (item.nodeName === ns + 'sequence') {
-      // Handle nested sequence (like the do_if/do_elseif/do_else sequence)
-      const sequenceElements: Element[] = [];
-      for (let i = 0; i < item.childNodes.length; i++) {
-        const child = item.childNodes[i];
-        if (child.nodeType === 1) {
-          const childElements = this.getElementsFromSequenceItem(child as Element, allChildren);
-          sequenceElements.push(...childElements);
-        }
-      }
-      return sequenceElements;
+      // When asked generically, return only the start-capable elements of this sequence
+      return this.getStartElementsOfSequence(item, allChildren);
     } else if (item.nodeName === ns + 'group') {
       const groupName = item.getAttribute('ref');
       if (groupName && this.schemaIndex.groups[groupName]) {
@@ -2612,22 +2685,88 @@ export class Schema {
             }
           }
         } else if (element.nodeName === ns + 'choice') {
-          // Nested choice
+          // Nested choice: include only its start-capable options
           choiceElements.push(...this.getElementsInChoice(element, allChildren));
         } else if (element.nodeName === ns + 'sequence') {
-          // Handle sequence within choice - for do_if/do_elseif/do_else case
-          choiceElements.push(...this.getElementsFromSequenceItem(element, allChildren));
+          // Sequence within choice: only include elements that can start that sequence (not follow-up-only items)
+          choiceElements.push(...this.getStartElementsOfSequence(element, allChildren));
         } else if (element.nodeName === ns + 'group') {
           // Group reference within choice
           const groupName = element.getAttribute('ref');
           if (groupName && this.schemaIndex.groups[groupName]) {
-            choiceElements.push(...this.getElementsFromSequenceItem(this.schemaIndex.groups[groupName], allChildren));
+            // Resolve group and include only its start-capable options
+            const grp = this.schemaIndex.groups[groupName];
+            if (grp.nodeName === ns + 'choice') {
+              choiceElements.push(...this.getElementsInChoice(grp, allChildren));
+            } else if (grp.nodeName === ns + 'sequence') {
+              choiceElements.push(...this.getStartElementsOfSequence(grp, allChildren));
+            } else if (grp.nodeName === ns + 'element') {
+              const elementName = grp.getAttribute('name');
+              if (elementName) {
+                const foundElement = allChildren.find(elem => elem.getAttribute('name') === elementName);
+                if (foundElement) {
+                  choiceElements.push(foundElement);
+                }
+              }
+            }
           }
         }
       }
     }
 
     return choiceElements;
+  }
+
+  /**
+   * Get the set of elements that can legally start the provided sequence, honoring minOccurs on leading items.
+   */
+  private getStartElementsOfSequence(seq: Element, allChildren: Element[]): Element[] {
+    const ns = 'xs:';
+    const results: Element[] = [];
+    for (let i = 0; i < seq.childNodes.length; i++) {
+      const child = seq.childNodes[i];
+      if (child.nodeType !== 1) continue;
+      const item = child as Element;
+      // Include start elements of this item
+      const startElems = this.getStartElementsFromItem(item, allChildren);
+      results.push(...startElems);
+      // Stop if this item is required; otherwise, continue to next optional item
+      const minOccurs = parseInt(item.getAttribute('minOccurs') || '1');
+      if (minOccurs >= 1) break;
+    }
+    // De-duplicate preserving order
+    const seen = new Set<string>();
+    return results.filter(e => {
+      const name = e.getAttribute('name') || '';
+      if (!name || seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    });
+  }
+
+  /**
+   * Return the elements that can appear at the start position of a sequence item.
+   */
+  private getStartElementsFromItem(item: Element, allChildren: Element[]): Element[] {
+    const ns = 'xs:';
+    if (item.nodeName === ns + 'element') {
+      const elementName = item.getAttribute('name');
+      if (elementName) {
+        const foundElement = allChildren.find(e => e.getAttribute('name') === elementName);
+        return foundElement ? [foundElement] : [];
+      }
+      return [];
+    } else if (item.nodeName === ns + 'choice') {
+      return this.getElementsInChoice(item, allChildren);
+    } else if (item.nodeName === ns + 'sequence') {
+      return this.getStartElementsOfSequence(item, allChildren);
+    } else if (item.nodeName === ns + 'group') {
+      const groupName = item.getAttribute('ref');
+      if (groupName && this.schemaIndex.groups[groupName]) {
+        return this.getStartElementsFromItem(this.schemaIndex.groups[groupName], allChildren);
+      }
+    }
+    return [];
   }
 
   /**
