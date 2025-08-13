@@ -2687,18 +2687,7 @@ export class Schema {
       }
     }
 
-  // Handle potential inner content model defined by the previous element's type
-  // When we are continuing within a nested sequence arm (suppressFallback=true),
-  // do NOT override with the inner model of the previous element (e.g., do_if's inner actions).
-  if (!suppressFallback && previousItem && previousItem.nodeName === 'xs:element') {
-      const remainingInSequence = this.getRemainingElementsInInnerSequence(
-        previousItem, previousSibling, sequenceItems, previousPosition, allChildren
-      );
-
-      if (remainingInSequence.length > 0) {
-        return remainingInSequence;
-      }
-    }
+  // Note: do not override sibling computation by diving into the previous element's inner model here.
 
     // Check if the previous item can repeat
     if (previousItem && this.itemCanRepeat(previousItem, previousSibling)) {
@@ -3043,7 +3032,7 @@ export class Schema {
     const stack: Element[] = [root];
     const visited = new Set<Element>();
     let steps = 0;
-    const MAX_STEPS = 1; // hard safety cap to avoid runaway traversals
+  const MAX_STEPS = 20000; // hard safety cap to avoid runaway traversals
     while (stack.length) {
       if (++steps > MAX_STEPS) break;
       const node = stack.pop()!;
