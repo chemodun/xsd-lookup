@@ -2144,11 +2144,27 @@ export class Schema {
 
     let filteredElements: Element[];
 
-    // If previousSibling is provided, filter based on sequence constraints
+    // If previousSibling is provided, filter based on sequence/choice constraints
     if (previousSibling) {
       filteredElements = this.filterElementsBySequenceConstraints(elementDef, childElements, previousSibling);
     } else {
-      filteredElements = childElements;
+      // No previous sibling: honor the content model and only return start-capable elements
+      const contentModel = this.findContentModel(elementDef);
+      if (contentModel) {
+        const modelType = contentModel.nodeName;
+        if (modelType === 'xs:choice') {
+          filteredElements = this.getElementsInChoice(contentModel, childElements);
+        } else if (modelType === 'xs:sequence') {
+          filteredElements = this.getStartElementsOfSequence(contentModel, childElements);
+        } else if (modelType === 'xs:all') {
+          // For xs:all, any element can start
+          filteredElements = childElements;
+        } else {
+          filteredElements = childElements;
+        }
+      } else {
+        filteredElements = childElements;
+      }
     }
 
     const result = new Map<string, string>();
@@ -2217,6 +2233,31 @@ export class Schema {
   private findContentModel(elementDef: Element): Element | null {
     const ns = 'xs:';
 
+    // If the node itself is already a content model, return it
+    if (elementDef.nodeName === ns + 'sequence' || elementDef.nodeName === ns + 'choice' || elementDef.nodeName === ns + 'all') {
+      return elementDef;
+    }
+
+    // If the node is a group (definition or ref), resolve to its direct content model
+    if (elementDef.nodeName === ns + 'group') {
+      const ref = elementDef.getAttribute('ref');
+      const groupNode = ref ? this.schemaIndex.groups[ref] : elementDef;
+      if (groupNode) {
+        const direct = this.findDirectContentModel(groupNode);
+        if (direct) return direct;
+      }
+    }
+
+    // If this is a complexType or content extension/restriction, find direct content model
+    if (elementDef.nodeName === ns + 'complexType' ||
+        elementDef.nodeName === ns + 'complexContent' ||
+        elementDef.nodeName === ns + 'simpleContent' ||
+        elementDef.nodeName === ns + 'extension' ||
+        elementDef.nodeName === ns + 'restriction') {
+      const direct = this.findDirectContentModel(elementDef);
+      if (direct) return direct;
+    }
+
     // Look for complexType first
     for (let i = 0; i < elementDef.childNodes.length; i++) {
       const child = elementDef.childNodes[i];
@@ -2236,7 +2277,7 @@ export class Schema {
     if (typeAttr && !this.isBuiltInXsdType(typeAttr)) {
       const typeDef = this.schemaIndex.types[typeAttr] || this.schemaIndex.types[typeAttr.replace(/^.*:/, '')];
       if (typeDef) {
-        return this.findContentModel(typeDef);
+  return this.findContentModel(typeDef);
       }
     }
 
@@ -2321,10 +2362,94 @@ export class Schema {
    * @returns Valid next elements
    */
   private getValidNextInChoice(choice: Element, previousSibling: string, allChildren: Element[]): Element[] {
-    // If previousSibling belongs to a nested sequence option within this choice, continue that inner sequence only.
-    const nestedSeq = this.findNestedSequenceContainingElement(choice, previousSibling);
+    // If previousSibling belongs to a nested sequence option within this choice,
+    // continue inside that same sequence arm and also allow restarting that arm (choice repetition).
+    // IMPORTANT: Prefer scanning the direct alternatives of this choice first to avoid
+    // accidentally picking outer sequences (e.g., the actions sequence) that contain the element indirectly.
+    const ns = 'xs:';
+    let nestedSeq: Element | null = null;
+    for (let i = 0; i < choice.childNodes.length && !nestedSeq; i++) {
+      const alt = choice.childNodes[i];
+      if (alt.nodeType !== 1) continue;
+      const el = alt as Element;
+      if (el.nodeName === ns + 'sequence') {
+        if (this.itemContainsElement(el, previousSibling)) {
+          nestedSeq = el;
+          break;
+        }
+      } else if (el.nodeName === ns + 'group') {
+        const ref = el.getAttribute('ref');
+        const grp = ref ? this.schemaIndex.groups[ref] : el;
+        if (grp) {
+          const model = this.findDirectContentModel(grp);
+          if (model && model.nodeName === ns + 'choice') {
+            for (let j = 0; j < model.childNodes.length && !nestedSeq; j++) {
+              const mchild = model.childNodes[j];
+              if (mchild.nodeType !== 1) continue;
+              const mEl = mchild as Element;
+              if (mEl.nodeName === ns + 'sequence' && this.itemContainsElement(mEl, previousSibling)) {
+                nestedSeq = mEl;
+                break;
+              }
+            }
+          } else if (model && model.nodeName === ns + 'sequence' && this.itemContainsElement(model, previousSibling)) {
+            nestedSeq = model;
+            break;
+          }
+        }
+      }
+    }
+    if (!nestedSeq) {
+      // Fallback: broader search that resolves groups and nested structures
+      nestedSeq = this.findNestedSequenceContainingElement(choice, previousSibling);
+    }
     if (nestedSeq) {
-      return this.getValidNextInSequence(nestedSeq, previousSibling, allChildren, true);
+      // Build a list of direct element items in the nested sequence along with occurs
+      const ns = 'xs:';
+      const items: { name: string; minOccurs: number; maxOccurs: number | 'unbounded' }[] = [];
+      for (let i = 0; i < nestedSeq.childNodes.length; i++) {
+        const child = nestedSeq.childNodes[i];
+        if (child.nodeType !== 1) continue;
+        const el = child as Element;
+        if (el.nodeName === ns + 'element') {
+          const name = el.getAttribute('name');
+          if (!name) continue;
+          const minOccurs = parseInt(el.getAttribute('minOccurs') || '1');
+          const maxAttr = el.getAttribute('maxOccurs') || '1';
+          const maxOccurs = maxAttr === 'unbounded' ? 'unbounded' : parseInt(maxAttr);
+          items.push({ name, minOccurs: isNaN(minOccurs) ? 1 : minOccurs, maxOccurs: maxOccurs as any });
+        }
+        // Note: nested structures inside the nested sequence are not expected in this arm
+      }
+
+      const allowed = new Set<string>();
+      const prevIndex = items.findIndex(it => it.name === previousSibling);
+      if (prevIndex !== -1) {
+        // 1) Repetition of the current element if allowed
+        const cur = items[prevIndex];
+        if (cur.maxOccurs === 'unbounded' || (typeof cur.maxOccurs === 'number' && cur.maxOccurs > 1)) {
+          allowed.add(cur.name);
+        }
+
+        // 2) Subsequent items until we hit a required one (inclusive)
+        for (let i = prevIndex + 1; i < items.length; i++) {
+          allowed.add(items[i].name);
+          if (items[i].minOccurs >= 1) break;
+        }
+      }
+
+      // 3) Because the choice can typically repeat, allow restarting the same sequence arm
+      const seqStarts = this.getStartElementsOfSequence(nestedSeq, allChildren).map(e => e.getAttribute('name')!).filter(Boolean) as string[];
+      for (const n of seqStarts) allowed.add(n);
+
+      // Map back to actual Element nodes
+      const results: Element[] = [];
+      for (const name of allowed) {
+        const el = allChildren.find(e => e.getAttribute('name') === name);
+        if (el) results.push(el);
+      }
+      // Deduplicate preserving insertion order already handled by Set
+      return results;
     }
 
     // Otherwise, we are at the start of a choice occurrence; return only the start elements of each alternative.
@@ -2370,14 +2495,198 @@ export class Schema {
 
     const validNext: Element[] = [];
 
-    // If the previous item is a choice, compute the valid next based on that choice context.
+    // If the previous item is a choice, we should only allow continuation inside the alternative that contains previousSibling.
     if (previousItem && previousItem.nodeName === 'xs:choice') {
-      const choiceNext = this.getValidNextInChoice(previousItem, previousSibling, allChildren);
-      validNext.push(...choiceNext);
+      // Prefer direct alternative scan first
+      const ns = 'xs:';
+      let nestedSeq: Element | null = null;
+      for (let i = 0; i < previousItem.childNodes.length && !nestedSeq; i++) {
+        const alt = previousItem.childNodes[i];
+        if (alt.nodeType !== 1) continue;
+        const el = alt as Element;
+        if (el.nodeName === ns + 'sequence') {
+          if (this.itemContainsElement(el, previousSibling)) {
+            nestedSeq = el;
+            break;
+          }
+        } else if (el.nodeName === ns + 'group') {
+          const ref = el.getAttribute('ref');
+          const grp2 = ref ? this.schemaIndex.groups[ref] : el;
+          if (grp2) {
+            const model2 = this.findDirectContentModel(grp2);
+            if (model2 && model2.nodeName === ns + 'choice') {
+              for (let j = 0; j < model2.childNodes.length && !nestedSeq; j++) {
+                const mchild = model2.childNodes[j];
+                if (mchild.nodeType !== 1) continue;
+                const mEl = mchild as Element;
+                if (mEl.nodeName === ns + 'sequence' && this.itemContainsElement(mEl, previousSibling)) {
+                  nestedSeq = mEl;
+                  break;
+                }
+              }
+            } else if (model2 && model2.nodeName === ns + 'sequence' && this.itemContainsElement(model2, previousSibling)) {
+              nestedSeq = model2;
+              break;
+            }
+          }
+        }
+      }
+      if (!nestedSeq) {
+        // Fallback: broader nested search
+        nestedSeq = this.findNestedSequenceContainingElement(previousItem, previousSibling);
+      }
+      if (nestedSeq) {
+        // Non-recursive computation for the nested sequence arm containing previousSibling
+        const ns = 'xs:';
+        const items: { name: string; minOccurs: number; maxOccurs: number | 'unbounded' }[] = [];
+        for (let i = 0; i < nestedSeq.childNodes.length; i++) {
+          const child = nestedSeq.childNodes[i];
+          if (child.nodeType !== 1) continue;
+          const el = child as Element;
+          if (el.nodeName === ns + 'element') {
+            const name = el.getAttribute('name');
+            if (!name) continue;
+            const minOccurs = parseInt(el.getAttribute('minOccurs') || '1');
+            const maxAttr = el.getAttribute('maxOccurs') || '1';
+            const maxOccurs = maxAttr === 'unbounded' ? 'unbounded' : parseInt(maxAttr);
+            items.push({ name, minOccurs: isNaN(minOccurs) ? 1 : minOccurs, maxOccurs: (maxOccurs as any) });
+          }
+        }
+        const allowedNames = new Set<string>();
+        const prevIndex = items.findIndex(it => it.name === previousSibling);
+        if (prevIndex !== -1) {
+          // 1) Repetition of the current element if allowed
+          const cur = items[prevIndex];
+          if (cur.maxOccurs === 'unbounded' || (typeof cur.maxOccurs === 'number' && cur.maxOccurs > 1)) {
+            allowedNames.add(cur.name);
+          }
+          // 2) Subsequent items until first required (inclusive)
+          for (let i = prevIndex + 1; i < items.length; i++) {
+            allowedNames.add(items[i].name);
+            if (items[i].minOccurs >= 1) break;
+          }
+        }
+        // 3) Allow restarting the same arm (choice repetition)
+        const seqStarts = this.getStartElementsOfSequence(nestedSeq, allChildren);
+        for (const e of seqStarts) {
+          const n = e.getAttribute('name');
+          if (n) allowedNames.add(n);
+        }
+        // Map to actual Element nodes
+        for (const name of allowedNames) {
+          const el = allChildren.find(e => e.getAttribute('name') === name);
+          if (el) validNext.push(el);
+        }
+      } else {
+        // previousSibling was one of the direct choice elements; allow following mandatory/optional items of outer sequence
+        for (let i = previousPosition + 1; i < sequenceItems.length; i++) {
+          const nextItem = sequenceItems[i];
+          const starts = this.getStartElementsFromItem(nextItem, allChildren);
+          validNext.push(...starts);
+          const minOccurs = parseInt(nextItem.getAttribute('minOccurs') || '1');
+          if (minOccurs >= 1) break;
+        }
+      }
     }
 
-    // Handle potential inner content model defined by the previous element's type
-    if (previousItem && previousItem.nodeName === 'xs:element') {
+    // If the previous item is a group, resolve its underlying model and delegate accordingly
+    if (previousItem && previousItem.nodeName === 'xs:group') {
+      const ns = 'xs:';
+      const ref = previousItem.getAttribute('ref');
+      const grp = ref ? this.schemaIndex.groups[ref] : previousItem;
+      if (grp) {
+        const model = this.findDirectContentModel(grp);
+        if (model) {
+          if (model.nodeName === ns + 'choice') {
+            // Prefer direct alternative scan first inside the resolved choice
+            let nestedSeq: Element | null = null;
+            for (let i = 0; i < model.childNodes.length && !nestedSeq; i++) {
+              const alt = model.childNodes[i];
+              if (alt.nodeType !== 1) continue;
+              const el = alt as Element;
+              if (el.nodeName === ns + 'sequence') {
+                if (this.itemContainsElement(el, previousSibling)) {
+                  nestedSeq = el;
+                  break;
+                }
+              } else if (el.nodeName === ns + 'group') {
+                const ref = el.getAttribute('ref');
+                const grp2 = ref ? this.schemaIndex.groups[ref] : el;
+                if (grp2) {
+                  const model2 = this.findDirectContentModel(grp2);
+                  if (model2 && model2.nodeName === ns + 'choice') {
+                    for (let j = 0; j < model2.childNodes.length && !nestedSeq; j++) {
+                      const mchild = model2.childNodes[j];
+                      if (mchild.nodeType !== 1) continue;
+                      const mEl = mchild as Element;
+                      if (mEl.nodeName === ns + 'sequence' && this.itemContainsElement(mEl, previousSibling)) {
+                        nestedSeq = mEl;
+                        break;
+                      }
+                    }
+                  } else if (model2 && model2.nodeName === ns + 'sequence' && this.itemContainsElement(model2, previousSibling)) {
+                    nestedSeq = model2;
+                    break;
+                  }
+                }
+              }
+            }
+            if (!nestedSeq) {
+              nestedSeq = this.findNestedSequenceContainingElement(model, previousSibling);
+            }
+            if (nestedSeq) {
+              // Compute allowed names within the nested sequence arm non-recursively
+              const items: { name: string; minOccurs: number; maxOccurs: number | 'unbounded' }[] = [];
+              for (let i = 0; i < nestedSeq.childNodes.length; i++) {
+                const child = nestedSeq.childNodes[i];
+                if (child.nodeType !== 1) continue;
+                const el = child as Element;
+                if (el.nodeName === ns + 'element') {
+                  const name = el.getAttribute('name');
+                  if (!name) continue;
+                  const minOccurs = parseInt(el.getAttribute('minOccurs') || '1');
+                  const maxAttr = el.getAttribute('maxOccurs') || '1';
+                  const maxOccurs = maxAttr === 'unbounded' ? 'unbounded' : parseInt(maxAttr);
+                  items.push({ name, minOccurs: isNaN(minOccurs) ? 1 : minOccurs, maxOccurs: (maxOccurs as any) });
+                }
+              }
+              const allowedNames = new Set<string>();
+              const prevIndex = items.findIndex(it => it.name === previousSibling);
+              if (prevIndex !== -1) {
+                const cur = items[prevIndex];
+                if (cur.maxOccurs === 'unbounded' || (typeof cur.maxOccurs === 'number' && cur.maxOccurs > 1)) {
+                  allowedNames.add(cur.name);
+                }
+                for (let i = prevIndex + 1; i < items.length; i++) {
+                  allowedNames.add(items[i].name);
+                  if (items[i].minOccurs >= 1) break;
+                }
+              }
+              const seqStarts = this.getStartElementsOfSequence(nestedSeq, allChildren);
+              for (const e of seqStarts) {
+                const n = e.getAttribute('name');
+                if (n) allowedNames.add(n);
+              }
+              for (const name of allowedNames) {
+                const el = allChildren.find(e => e.getAttribute('name') === name);
+                if (el) validNext.push(el);
+              }
+            }
+          } else if (model.nodeName === ns + 'sequence') {
+            const seqNext = this.getValidNextInSequence(model, previousSibling, allChildren, true);
+            validNext.push(...seqNext);
+          } else if (model.nodeName === ns + 'all') {
+            // xs:all has no ordering; allow allChildren
+            validNext.push(...allChildren);
+          }
+        }
+      }
+    }
+
+  // Handle potential inner content model defined by the previous element's type
+  // When we are continuing within a nested sequence arm (suppressFallback=true),
+  // do NOT override with the inner model of the previous element (e.g., do_if's inner actions).
+  if (!suppressFallback && previousItem && previousItem.nodeName === 'xs:element') {
       const remainingInSequence = this.getRemainingElementsInInnerSequence(
         previousItem, previousSibling, sequenceItems, previousPosition, allChildren
       );
@@ -2387,15 +2696,34 @@ export class Schema {
       }
     }
 
-    // Check if the previous element can repeat
+    // Check if the previous item can repeat
     if (previousItem && this.itemCanRepeat(previousItem, previousSibling)) {
-      const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSibling);
-      if (repeatElement) {
-        validNext.push(repeatElement);
+      const ns = 'xs:';
+      if (previousItem.nodeName === ns + 'choice') {
+        // Repeating a choice: only allow starting its sequence alternatives (e.g., do_if)
+        validNext.push(...this.getSequenceStartElementsInChoice(previousItem, allChildren));
+      } else if (previousItem.nodeName === ns + 'group') {
+        // Repeating a group: if it resolves to a choice, allow starting sequence alternatives only
+        const ref = previousItem.getAttribute('ref');
+        const grp = ref ? this.schemaIndex.groups[ref] : previousItem;
+        if (grp) {
+          const model = this.findDirectContentModel(grp);
+          if (model && model.nodeName === ns + 'choice') {
+            validNext.push(...this.getSequenceStartElementsInChoice(model, allChildren));
+          } else {
+            // Fallback: repeat the same element
+            const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSibling);
+            if (repeatElement) validNext.push(repeatElement);
+          }
+        }
+      } else {
+        // Element or other item repeats itself
+        const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSibling);
+        if (repeatElement) validNext.push(repeatElement);
       }
     }
 
-    // Add elements that come after the previous position in the sequence
+  // Add elements that come after the previous position in the sequence (only when not staying within a nested choice arm)
     for (let i = previousPosition + 1; i < sequenceItems.length; i++) {
       const nextItem = sequenceItems[i];
       const itemElements = this.getElementsFromSequenceItem(nextItem, allChildren);
@@ -2421,21 +2749,77 @@ export class Schema {
       }
     }
 
-    if (!hasRequiredAfter && !suppressFallback) {
-      // Allow other alternatives from the same choice (start elements only), not every child.
-      if (previousItem && previousItem.nodeName === 'xs:choice') {
-        const startOptions = this.getElementsInChoice(previousItem, allChildren);
-        const existing = new Set(validNext.map(e => e.getAttribute('name') || ''));
-        for (const child of startOptions) {
-          const name = child.getAttribute('name') || '';
-          if (!existing.has(name)) {
-            validNext.push(child);
+  // Do not fall back to other alternatives of the same choice here; that would allow do_elseif/do_else after unrelated items like do_all
+
+    // Deduplicate preserving order
+    const seen = new Set<string>();
+    const dedup = validNext.filter(e => {
+      const n = e.getAttribute('name') || '';
+      if (!n) return false;
+      if (seen.has(n)) return false;
+      seen.add(n);
+      return true;
+    });
+
+    return dedup;
+  }
+
+  /**
+   * From the provided choice, return only the start-capable elements of sequence alternatives.
+   * This matches the requirement that after a non-sequence sibling, only the sequence path (do_if...) may start.
+   */
+  private getSequenceStartElementsInChoice(choice: Element, allChildren: Element[]): Element[] {
+    const ns = 'xs:';
+    const result: Element[] = [];
+
+    const collectFromNode = (node: Element) => {
+      if (node.nodeName === ns + 'sequence') {
+        result.push(...this.getStartElementsOfSequence(node, allChildren));
+      } else if (node.nodeName === ns + 'group') {
+        const ref = node.getAttribute('ref');
+        const grp = ref ? this.schemaIndex.groups[ref] : node;
+        if (grp) {
+          const model = this.findDirectContentModel(grp);
+          if (model) {
+            if (model.nodeName === ns + 'sequence') {
+              result.push(...this.getStartElementsOfSequence(model, allChildren));
+            } else if (model.nodeName === ns + 'choice') {
+              // Dive into nested choice to find sequence alternatives
+              for (let k = 0; k < model.childNodes.length; k++) {
+                const alt = model.childNodes[k];
+                if (alt.nodeType === 1) {
+                  collectFromNode(alt as Element);
+                }
+              }
+            }
+          }
+        }
+      } else if (node.nodeName === ns + 'choice') {
+        // Dive into nested choice
+        for (let k = 0; k < node.childNodes.length; k++) {
+          const alt = node.childNodes[k];
+          if (alt.nodeType === 1) {
+            collectFromNode(alt as Element);
           }
         }
       }
+      // Ignore direct element alternatives (e.g., do_all)
+    };
+
+    for (let i = 0; i < choice.childNodes.length; i++) {
+      const child = choice.childNodes[i];
+      if (child.nodeType !== 1) continue;
+      collectFromNode(child as Element);
     }
 
-    return validNext;
+    // Deduplicate preserving order
+    const seen = new Set<string>();
+    return result.filter(e => {
+      const name = e.getAttribute('name') || '';
+      if (!name || seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    });
   }
 
   /**
@@ -2511,17 +2895,8 @@ export class Schema {
       if (dedupPrioritized.length === 0) return [];
 
       // If inner start is all optional, append other elements from parent level
-      if (!innerHasRequiredFirst) {
-        const result = [...dedupPrioritized];
-        const existing = new Set(result.map(e => e.getAttribute('name') || ''));
-        for (const child of allChildren) {
-          const name = child.getAttribute('name') || '';
-          if (!existing.has(name)) {
-            result.push(child);
-          }
-        }
-        return result;
-      }
+  // If inner start is all optional, do NOT include unrelated alternatives from parent choice here.
+  // Only return the inner start-capable elements; the outer sequence logic will handle following items.
 
       return dedupPrioritized;
     }
@@ -2555,10 +2930,14 @@ export class Schema {
       }
       return false;
     } else if (item.nodeName === ns + 'group') {
-      // Check if the group contains the element (simplified)
+      // Check if the group contains the element (resolve ref or definition)
       const groupName = item.getAttribute('ref');
-      if (groupName && this.schemaIndex.groups[groupName]) {
-        return this.itemContainsElement(this.schemaIndex.groups[groupName], elementName);
+      const grp = groupName ? this.schemaIndex.groups[groupName] : item;
+      if (grp) {
+        const model = this.findDirectContentModel(grp);
+        if (model) {
+          return this.itemContainsElement(model, elementName);
+        }
       }
     }
 
@@ -2573,9 +2952,31 @@ export class Schema {
     const stack: Element[] = [root];
     while (stack.length) {
       const node = stack.pop()!;
+
+      // If this is a group, resolve to its model and traverse that instead of raw children
+      if (node.nodeName === ns + 'group') {
+        const ref = node.getAttribute('ref');
+        const grp = ref ? this.schemaIndex.groups[ref] : node;
+        if (grp) {
+          const model = this.findDirectContentModel(grp);
+          if (model) {
+            // If resolved model is a sequence that contains the element, return it
+            if (model.nodeName === ns + 'sequence' && this.itemContainsElement(model, elementName)) {
+              return model;
+            }
+            // Otherwise, continue traversal within the resolved model
+            stack.push(model);
+            continue;
+          }
+        }
+      }
+
+      // Direct sequence detection
       if (node.nodeName === ns + 'sequence' && this.itemContainsElement(node, elementName)) {
         return node;
       }
+
+      // Traverse children
       for (let i = 0; i < node.childNodes.length; i++) {
         const child = node.childNodes[i];
         if (child.nodeType === 1) {
@@ -2606,10 +3007,18 @@ export class Schema {
           if (this.choiceContainsElement(element, elementName)) {
             return true;
           }
+        } else if (element.nodeName === ns + 'sequence') {
+          // A sequence can be an alternative in a choice (e.g., do_if/do_elseif/do_else)
+          // Delegate to generic itemContainsElement to search within the sequence
+          if (this.itemContainsElement(element, elementName)) {
+            return true;
+          }
         } else if (element.nodeName === ns + 'group') {
           const groupName = element.getAttribute('ref');
-          if (groupName && this.schemaIndex.groups[groupName]) {
-            if (this.itemContainsElement(this.schemaIndex.groups[groupName], elementName)) {
+          const grp = groupName ? this.schemaIndex.groups[groupName] : element;
+          if (grp) {
+            const model = this.findDirectContentModel(grp);
+            if (model && this.itemContainsElement(model, elementName)) {
               return true;
             }
           }
@@ -2634,6 +3043,10 @@ export class Schema {
       return maxOccurs === 'unbounded' || parseInt(maxOccurs) > 1;
     } else if (item.nodeName === ns + 'choice') {
       // For choice, check if the choice itself can repeat
+      const maxOccurs = item.getAttribute('maxOccurs') || '1';
+      return maxOccurs === 'unbounded' || parseInt(maxOccurs) > 1;
+    } else if (item.nodeName === ns + 'group') {
+      // Repetition on the group reference itself
       const maxOccurs = item.getAttribute('maxOccurs') || '1';
       return maxOccurs === 'unbounded' || parseInt(maxOccurs) > 1;
     }
@@ -2663,8 +3076,25 @@ export class Schema {
       return this.getStartElementsOfSequence(item, allChildren);
     } else if (item.nodeName === ns + 'group') {
       const groupName = item.getAttribute('ref');
-      if (groupName && this.schemaIndex.groups[groupName]) {
-        return this.getElementsFromSequenceItem(this.schemaIndex.groups[groupName], allChildren);
+      const grp = groupName ? this.schemaIndex.groups[groupName] : item;
+      if (grp) {
+        const model = this.findDirectContentModel(grp);
+        if (model) {
+          if (model.nodeName === ns + 'choice') {
+            return this.getElementsInChoice(model, allChildren);
+          } else if (model.nodeName === ns + 'sequence') {
+            return this.getStartElementsOfSequence(model, allChildren);
+          } else if (model.nodeName === ns + 'all') {
+            const results: Element[] = [];
+            for (let j = 0; j < model.childNodes.length; j++) {
+              const allChild = model.childNodes[j];
+              if (allChild.nodeType === 1) {
+                results.push(...this.getStartElementsFromItem(allChild as Element, allChildren));
+              }
+            }
+            return results;
+          }
+        }
       }
     }
 
@@ -2701,21 +3131,22 @@ export class Schema {
           // Sequence within choice: only include elements that can start that sequence (not follow-up-only items)
           choiceElements.push(...this.getStartElementsOfSequence(element, allChildren));
         } else if (element.nodeName === ns + 'group') {
-          // Group reference within choice
+          // Resolve group (ref or definition) to its direct content model and include start-capable options
           const groupName = element.getAttribute('ref');
-          if (groupName && this.schemaIndex.groups[groupName]) {
-            // Resolve group and include only its start-capable options
-            const grp = this.schemaIndex.groups[groupName];
-            if (grp.nodeName === ns + 'choice') {
-              choiceElements.push(...this.getElementsInChoice(grp, allChildren));
-            } else if (grp.nodeName === ns + 'sequence') {
-              choiceElements.push(...this.getStartElementsOfSequence(grp, allChildren));
-            } else if (grp.nodeName === ns + 'element') {
-              const elementName = grp.getAttribute('name');
-              if (elementName) {
-                const foundElement = allChildren.find(elem => elem.getAttribute('name') === elementName);
-                if (foundElement) {
-                  choiceElements.push(foundElement);
+          const grp = groupName ? this.schemaIndex.groups[groupName] : element;
+          if (grp) {
+            const model = this.findDirectContentModel(grp);
+            if (model) {
+              if (model.nodeName === ns + 'choice') {
+                choiceElements.push(...this.getElementsInChoice(model, allChildren));
+              } else if (model.nodeName === ns + 'sequence') {
+                choiceElements.push(...this.getStartElementsOfSequence(model, allChildren));
+              } else if (model.nodeName === ns + 'all') {
+                for (let j = 0; j < model.childNodes.length; j++) {
+                  const allChild = model.childNodes[j];
+                  if (allChild.nodeType === 1) {
+                    choiceElements.push(...this.getStartElementsFromItem(allChild as Element, allChildren));
+                  }
                 }
               }
             }
@@ -2771,10 +3202,29 @@ export class Schema {
     } else if (item.nodeName === ns + 'sequence') {
       return this.getStartElementsOfSequence(item, allChildren);
     } else if (item.nodeName === ns + 'group') {
+      // Resolve group (ref or definition) to its direct content model
       const groupName = item.getAttribute('ref');
-      if (groupName && this.schemaIndex.groups[groupName]) {
-        return this.getStartElementsFromItem(this.schemaIndex.groups[groupName], allChildren);
+      const grp = groupName ? this.schemaIndex.groups[groupName] : item;
+      if (grp) {
+        const model = this.findDirectContentModel(grp);
+        if (model) {
+          if (model.nodeName === ns + 'choice') {
+            return this.getElementsInChoice(model, allChildren);
+          } else if (model.nodeName === ns + 'sequence') {
+            return this.getStartElementsOfSequence(model, allChildren);
+          } else if (model.nodeName === ns + 'all') {
+            const results: Element[] = [];
+            for (let j = 0; j < model.childNodes.length; j++) {
+              const allChild = model.childNodes[j];
+              if (allChild.nodeType === 1) {
+                results.push(...this.getStartElementsFromItem(allChild as Element, allChildren));
+              }
+            }
+            return results;
+          }
+        }
       }
+      return [];
     }
     return [];
   }
