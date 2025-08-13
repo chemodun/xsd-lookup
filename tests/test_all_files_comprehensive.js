@@ -167,7 +167,7 @@ function extractElementsFromXml(xmlContent, filePath) {
     const doc = new DOMParser().parseFromString(xmlContent, 'application/xml');
     const elements = [];
 
-    function walkElements(node, hierarchyPath = []) {
+    function walkElements(node, hierarchyPath = [], previousSibling = null) {
       if (!node || node.nodeType !== 1) return;
 
       const elementName = node.nodeName;
@@ -179,16 +179,19 @@ function extractElementsFromXml(xmlContent, filePath) {
         // Keep old format for compatibility
         parent: hierarchyPath.length > 0 ? hierarchyPath[hierarchyPath.length - 1] : null,
         grandparent: hierarchyPath.length > 1 ? hierarchyPath[hierarchyPath.length - 2] : null,
+        previousSibling: previousSibling,
         attributes: getElementAttributes(node),
         attributeValues: getElementAttributeValues(node)
       });
 
       // Recurse into children with updated hierarchy
       const newHierarchy = [...hierarchyPath, elementName];
+      let lastElementName = null;
       for (let i = 0; i < node.childNodes.length; i++) {
         const child = node.childNodes[i];
         if (child.nodeType === 1) {
-          walkElements(child, newHierarchy);
+          walkElements(child, newHierarchy, lastElementName);
+          lastElementName = child.nodeName;
         }
       }
     }
@@ -246,6 +249,20 @@ function validateElement(schemaName, elementInfo, filePath) {
     const errorMsg = `Element '${name}' not found in schema`;
     const errorDetails = `Hierarchy: [${bottomUpHierarchy.join(' > ')}], File: ${filePath}`;
     throw new Error(`${errorMsg}. ${errorDetails}`);
+  }
+
+  // Additional validation: ensure this element is allowed under its parent
+  const parentName = elementInfo.parent;
+  if (parentName) {
+    const parentBottomUp = bottomUpHierarchy.slice(1); // parent's own bottom-up hierarchy (its parents only)
+    const prev = elementInfo.previousSibling || undefined;
+    const allowedChildren = xsdRef.getPossibleChildElements(schemaName, parentName, parentBottomUp, prev);
+    if (!allowedChildren.has(name)) {
+      const where = `parent: '${parentName}'` + (prev ? `, previous sibling: '${prev}'` : ', first child');
+      const errorMsg = `Element '${name}' is not allowed here under ${where}`;
+      const errorDetails = `Parent hierarchy: [${parentBottomUp.join(' > ')}], File: ${filePath}`;
+      throw new Error(`${errorMsg}. ${errorDetails}`);
+    }
   }
 
   // Get comprehensive attribute information including validation rules
