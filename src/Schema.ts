@@ -2700,8 +2700,8 @@ export class Schema {
     if (previousItem && this.itemCanRepeat(previousItem, previousSibling)) {
       const ns = 'xs:';
       if (previousItem.nodeName === ns + 'choice') {
-        // Repeating a choice: only allow starting its sequence alternatives (e.g., do_if)
-        validNext.push(...this.getSequenceStartElementsInChoice(previousItem, allChildren));
+        // Repeating a choice: allow all alternatives that can start a new occurrence
+        validNext.push(...this.getElementsInChoice(previousItem, allChildren));
       } else if (previousItem.nodeName === ns + 'group') {
         // Repeating a group: if it resolves to a choice, allow starting sequence alternatives only
         const ref = previousItem.getAttribute('ref');
@@ -2709,7 +2709,8 @@ export class Schema {
         if (grp) {
           const model = this.findDirectContentModel(grp);
           if (model && model.nodeName === ns + 'choice') {
-            validNext.push(...this.getSequenceStartElementsInChoice(model, allChildren));
+            // Allow all choice alternatives that can start a new occurrence
+            validNext.push(...this.getElementsInChoice(model, allChildren));
           } else {
             // Fallback: repeat the same element
             const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSibling);
