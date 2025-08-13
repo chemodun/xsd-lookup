@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.6.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.6.0...xsd-lookup@v1.6.1) (2025-08-13)
+
+### Bug Fixes
+
+* enhance annotation extraction for elements by checking type definitions ([6f20e4d](https://github.com/chemodun/xsd-lookup/commit/6f20e4d3248292bed3d5dfe2475d0e8fe2d47bd7))
+* enhance choice handling to allow all alternatives for new occurrences for elements of sequences ([43de111](https://github.com/chemodun/xsd-lookup/commit/43de11142cc8102cd007f6ba8d76f1cc987aada2))
+* enhance XML element extraction and validation by tracking previous siblings and enforcing parent-child relationships ([93d8dfe](https://github.com/chemodun/xsd-lookup/commit/93d8dfe5513b7dbb4da5a6fe530180af151fa193))
+
+### Code Refactoring
+
+* enhance choice handling by tracking non-start elements and improving nested sequence logic ([1841558](https://github.com/chemodun/xsd-lookup/commit/1841558ce3771a89f9844e1ae77d7b8a2a03bd7f))
+* first iteration to implement a right sequence processing ([1ca6459](https://github.com/chemodun/xsd-lookup/commit/1ca6459f05297c87d12a799e81e267cfd0158382))
+* improve sibling computation logic and increase safety cap for traversal steps ([a1fbced](https://github.com/chemodun/xsd-lookup/commit/a1fbcedd1fb9af306d39d09cc8cda02dbc7beefd))
+* simplify sequence and choice handling by removing special cases and enhancing data-driven logic ([35b4d20](https://github.com/chemodun/xsd-lookup/commit/35b4d204d8474b18de3a9d4f7ce4695b0e8dff62))
+* streamline minOccurs and maxOccurs handling by introducing effective computation methods ([872e07b](https://github.com/chemodun/xsd-lookup/commit/872e07b27ff55c31abce020e994b3be36586fc01))
+
 ## [1.6.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.5.1...xsd-lookup@v1.6.0) (2025-07-23)
 
 ### Features
