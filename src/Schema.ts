@@ -2414,10 +2414,9 @@ export class Schema {
         if (el.nodeName === ns + 'element') {
           const name = el.getAttribute('name');
           if (!name) continue;
-          const minOccurs = parseInt(el.getAttribute('minOccurs') || '1');
-          const maxAttr = el.getAttribute('maxOccurs') || '1';
-          const maxOccurs = maxAttr === 'unbounded' ? 'unbounded' : parseInt(maxAttr);
-          items.push({ name, minOccurs: isNaN(minOccurs) ? 1 : minOccurs, maxOccurs: maxOccurs as any });
+          const minOccurs = this.getEffectiveMinOccurs(el, nestedSeq);
+          const maxOccurs = this.getEffectiveMaxOccurs(el, nestedSeq);
+          items.push({ name, minOccurs, maxOccurs });
         }
         // Note: nested structures inside the nested sequence are not expected in this arm
       }
@@ -2538,7 +2537,7 @@ export class Schema {
       if (nestedSeq) {
         // Non-recursive computation for the nested sequence arm containing previousSibling
         const ns = 'xs:';
-        const items: { name: string; minOccurs: number; maxOccurs: number | 'unbounded' }[] = [];
+    const items: { name: string; minOccurs: number; maxOccurs: number | 'unbounded' }[] = [];
         for (let i = 0; i < nestedSeq.childNodes.length; i++) {
           const child = nestedSeq.childNodes[i];
           if (child.nodeType !== 1) continue;
@@ -2546,10 +2545,9 @@ export class Schema {
           if (el.nodeName === ns + 'element') {
             const name = el.getAttribute('name');
             if (!name) continue;
-            const minOccurs = parseInt(el.getAttribute('minOccurs') || '1');
-            const maxAttr = el.getAttribute('maxOccurs') || '1';
-            const maxOccurs = maxAttr === 'unbounded' ? 'unbounded' : parseInt(maxAttr);
-            items.push({ name, minOccurs: isNaN(minOccurs) ? 1 : minOccurs, maxOccurs: (maxOccurs as any) });
+      const minOccurs = this.getEffectiveMinOccurs(el, nestedSeq);
+      const maxOccurs = this.getEffectiveMaxOccurs(el, nestedSeq);
+      items.push({ name, minOccurs, maxOccurs });
           }
         }
         const allowedNames = new Set<string>();
@@ -2583,7 +2581,7 @@ export class Schema {
           const nextItem = sequenceItems[i];
           const starts = this.getStartElementsFromItem(nextItem, allChildren);
           validNext.push(...starts);
-          const minOccurs = parseInt(nextItem.getAttribute('minOccurs') || '1');
+          const minOccurs = this.getEffectiveMinOccurs(nextItem, sequence);
           if (minOccurs >= 1) break;
         }
       }
@@ -2636,7 +2634,7 @@ export class Schema {
             }
             if (nestedSeq) {
               // Compute allowed names within the nested sequence arm non-recursively
-              const items: { name: string; minOccurs: number; maxOccurs: number | 'unbounded' }[] = [];
+        const items: { name: string; minOccurs: number; maxOccurs: number | 'unbounded' }[] = [];
               for (let i = 0; i < nestedSeq.childNodes.length; i++) {
                 const child = nestedSeq.childNodes[i];
                 if (child.nodeType !== 1) continue;
@@ -2644,10 +2642,9 @@ export class Schema {
                 if (el.nodeName === ns + 'element') {
                   const name = el.getAttribute('name');
                   if (!name) continue;
-                  const minOccurs = parseInt(el.getAttribute('minOccurs') || '1');
-                  const maxAttr = el.getAttribute('maxOccurs') || '1';
-                  const maxOccurs = maxAttr === 'unbounded' ? 'unbounded' : parseInt(maxAttr);
-                  items.push({ name, minOccurs: isNaN(minOccurs) ? 1 : minOccurs, maxOccurs: (maxOccurs as any) });
+          const minOccurs = this.getEffectiveMinOccurs(el, nestedSeq);
+          const maxOccurs = this.getEffectiveMaxOccurs(el, nestedSeq);
+          items.push({ name, minOccurs, maxOccurs });
                 }
               }
               const allowedNames = new Set<string>();
@@ -2724,15 +2721,22 @@ export class Schema {
       }
     }
 
+    // If the sequence itself can repeat (maxOccurs on xs:sequence), allow restarting the sequence
+    const seqMaxRaw = sequence.getAttribute('maxOccurs') || '1';
+    const seqCanRepeat = seqMaxRaw === 'unbounded' || (!isNaN(parseInt(seqMaxRaw)) && parseInt(seqMaxRaw) > 1);
+    if (seqCanRepeat) {
+      validNext.push(...this.getStartElementsOfSequence(sequence, allChildren));
+    }
+
   // Add elements that come after the previous position in the sequence (only when not staying within a nested choice arm)
     for (let i = previousPosition + 1; i < sequenceItems.length; i++) {
       const nextItem = sequenceItems[i];
-      const itemElements = this.getElementsFromSequenceItem(nextItem, allChildren);
+  const itemElements = this.getElementsFromSequenceItem(nextItem, allChildren);
       validNext.push(...itemElements);
 
       // If this item is required (minOccurs >= 1), stop here
       // If it's optional (minOccurs = 0), continue to the next items
-      const minOccurs = parseInt(nextItem.getAttribute('minOccurs') || '1');
+  const minOccurs = this.getEffectiveMinOccurs(nextItem, sequence);
       if (minOccurs >= 1) {
         break; // Required item found, stop here
       }
@@ -2743,7 +2747,7 @@ export class Schema {
     // from the upper-level choice (i.e., allChildren minus those already suggested).
     let hasRequiredAfter = false;
     for (let i = previousPosition + 1; i < sequenceItems.length; i++) {
-      const minOccurs = parseInt(sequenceItems[i].getAttribute('minOccurs') || '1');
+      const minOccurs = this.getEffectiveMinOccurs(sequenceItems[i], sequence);
       if (minOccurs >= 1) {
         hasRequiredAfter = true;
         break;
@@ -2852,7 +2856,7 @@ export class Schema {
       const prioritized: Element[] = [];
       let innerHasRequiredFirst = false;
 
-      if (innerModel.nodeName === ns + 'sequence') {
+  if (innerModel.nodeName === ns + 'sequence') {
         // Collect starting elements of the inner sequence, respecting minOccurs
         for (let i = 0; i < innerModel.childNodes.length; i++) {
           const child = innerModel.childNodes[i];
@@ -2860,8 +2864,8 @@ export class Schema {
             const item = child as Element;
             const elems = this.getElementsFromSequenceItem(item, allChildren);
             prioritized.push(...elems);
-            const minOccurs = parseInt(item.getAttribute('minOccurs') || '1');
-            if (minOccurs >= 1) {
+    const minOccurs = this.getEffectiveMinOccurs(item, innerModel);
+    if (minOccurs >= 1) {
               innerHasRequiredFirst = true;
               break; // Stop at first required inner item
             }
@@ -3170,10 +3174,10 @@ export class Schema {
       if (child.nodeType !== 1) continue;
       const item = child as Element;
       // Include start elements of this item
-      const startElems = this.getStartElementsFromItem(item, allChildren);
+  const startElems = this.getStartElementsFromItem(item, allChildren);
       results.push(...startElems);
       // Stop if this item is required; otherwise, continue to next optional item
-      const minOccurs = parseInt(item.getAttribute('minOccurs') || '1');
+  const minOccurs = this.getEffectiveMinOccurs(item, seq);
       if (minOccurs >= 1) break;
     }
     // De-duplicate preserving order
@@ -3228,6 +3232,42 @@ export class Schema {
       return [];
     }
     return [];
+  }
+
+  /**
+   * Compute effective minOccurs for a sequence child item, propagating from the enclosing sequence if undefined.
+   */
+  private getEffectiveMinOccurs(item: Element, parentSequence?: Element): number {
+    const raw = item.getAttribute('minOccurs');
+    if (raw !== null && raw !== '') {
+      const v = parseInt(raw);
+      return isNaN(v) ? 1 : v;
+    }
+    if (parentSequence) {
+      const seqRaw = parentSequence.getAttribute('minOccurs');
+      if (seqRaw !== null && seqRaw !== '') {
+        const sv = parseInt(seqRaw);
+        return isNaN(sv) ? 1 : sv;
+      }
+    }
+    return 1;
+  }
+
+  /**
+   * Compute effective maxOccurs for a sequence child item, propagating from the enclosing sequence if undefined.
+   */
+  private getEffectiveMaxOccurs(item: Element, parentSequence?: Element): number | 'unbounded' {
+    const raw = item.getAttribute('maxOccurs');
+    if (raw !== null && raw !== '') {
+      return raw === 'unbounded' ? 'unbounded' : (isNaN(parseInt(raw)) ? 1 : parseInt(raw));
+    }
+    if (parentSequence) {
+      const seqRaw = parentSequence.getAttribute('maxOccurs');
+      if (seqRaw !== null && seqRaw !== '') {
+        return seqRaw === 'unbounded' ? 'unbounded' : (isNaN(parseInt(seqRaw)) ? 1 : parseInt(seqRaw));
+      }
+    }
+    return 1;
   }
 
   /**
