@@ -2,13 +2,11 @@
 
 ## [1.6.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.6.0...xsd-lookup@v1.6.1) (2025-08-13)
 
-
 ### Bug Fixes
 
 * enhance annotation extraction for elements by checking type definitions ([6f20e4d](https://github.com/chemodun/xsd-lookup/commit/6f20e4d3248292bed3d5dfe2475d0e8fe2d47bd7))
 * enhance choice handling to allow all alternatives for new occurrences for elements of sequences ([43de111](https://github.com/chemodun/xsd-lookup/commit/43de11142cc8102cd007f6ba8d76f1cc987aada2))
 * enhance XML element extraction and validation by tracking previous siblings and enforcing parent-child relationships ([93d8dfe](https://github.com/chemodun/xsd-lookup/commit/93d8dfe5513b7dbb4da5a6fe530180af151fa193))
-
 
 ### Code Refactoring
 
