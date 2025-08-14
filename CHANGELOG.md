@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.8.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.7.0...xsd-lookup@v1.8.0) (2025-08-14)
+
+
+### Features
+
+* **Schema:** add ElementLocation interface for element source tracking ([64ebca1](https://github.com/chemodun/xsd-lookup/commit/64ebca16e969f17d74e0ee014eeab234d3899817))
+* **XsdReference:** re-export ElementLocation for public API ([64ebca1](https://github.com/chemodun/xsd-lookup/commit/64ebca16e969f17d74e0ee014eeab234d3899817))
+
 ## [1.7.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.6.1...xsd-lookup@v1.7.0) (2025-08-14)
 
 ### Features
