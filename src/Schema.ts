@@ -2446,12 +2446,29 @@ export class Schema {
     const existing = cache.get(el);
     if (existing !== undefined) return existing;
     let annotation = Schema.extractAnnotationText(el) || '';
+
+    // Fallback 1: annotation from referenced type (handles prefixed and unprefixed names)
     if (!annotation) {
       const typeName = el.getAttribute('type');
       if (typeName) {
-        const typeDef = this.schemaIndex.types[typeName];
+        const unprefixed = typeName.replace(/^.*:/, '');
+        const typeDef = this.schemaIndex.types[typeName] || this.schemaIndex.types[unprefixed];
         if (typeDef) {
           annotation = Schema.extractAnnotationText(typeDef) || '';
+        }
+      }
+    }
+
+    // Fallback 2: annotation from inline type definition (xs:complexType/xs:simpleType)
+    if (!annotation) {
+      const ns = 'xs:';
+      for (let i = 0; i < el.childNodes.length; i++) {
+        const child = el.childNodes[i];
+        if (child.nodeType !== 1) continue;
+        const c = child as Element;
+        if (c.nodeName === ns + 'complexType' || c.nodeName === ns + 'simpleType') {
+          annotation = Schema.extractAnnotationText(c) || '';
+          if (annotation) break;
         }
       }
     }
