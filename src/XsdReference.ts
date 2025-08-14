@@ -147,6 +147,14 @@ export class XsdReference {
   }
 
   /**
+   * Get the element source location: file URI and position in the source file.
+   * Returns undefined if source file is unknown.
+   */
+  public static getElementLocation(element: Element): { uri: string; line: number; column: number } | undefined {
+    return Schema.getElementLocation(element);
+  }
+
+  /**
    * Get element attributes using a specific schema by name
    * @param schemaName The schema to use
    * @param elementName The element name to find
@@ -461,7 +469,7 @@ export class XsdReference {
    * @returns Object containing enumeration values and their annotations, or null if not found or not an enumeration
    */
   public getSimpleTypeEnumerationValues(
-    schemaName: string, 
+    schemaName: string,
     simpleTypeName: string
   ): { values: string[], annotations: Map<string, string> } | null {
     const schema = this.loadSchema(schemaName);

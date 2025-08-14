@@ -76,17 +76,22 @@ export interface AttributeInfo {
 // Enhanced attribute information with validation rules
 interface EnhancedAttributeInfo {
   name: string;
-  type: string;
-  required: boolean;
+  type?: string;
+  required?: boolean;
   patterns?: string[];
   enumValues?: string[];
   enumValuesAnnotations?: Map<string, string>;
+  annotation?: string;
   minLength?: number;
   maxLength?: number;
   minInclusive?: number;
   maxInclusive?: number;
   minExclusive?: number;
   maxExclusive?: number;
+  // Location of attribute definition in the XSD
+  uri?: string;
+  line?: number;
+  column?: number;
 }
 
 // Attribute validation result
@@ -96,6 +101,12 @@ interface AttributeValidationResult {
   expectedType?: string;
   restrictions?: string[];
   allowedValues?: string[];
+}
+
+// Attribute name validation result
+interface AttributeNameValidationResult {
+  wrongAttributes: string[];
+  missingRequiredAttributes: string[];
 }
 ```
 
@@ -219,6 +230,8 @@ Get all attributes for an element with complete type information including:
 - Enumeration values (if applicable)
 - Pattern restrictions
 - Numeric/length constraints
+- Attribute definition location (file URI, line, column)
+- Attribute annotation text (if available)
 
 **Important**: The `hierarchy` parameter should be provided in **bottom-up order** (from immediate parent to root element).
 
@@ -232,7 +245,11 @@ const attributes: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes
 //   type: 'expression',
 //   required: true,
 //   patterns: ['[pattern regex]'],
-//   enumValues: undefined
+//   enumValues: undefined,
+//   annotation: 'Description text...'(optional),
+//   uri: 'file:///C:/path/to/aiscripts.xsd',
+//   line: 123,
+//   column: 5
 // }
 // ...]
 ```
@@ -335,7 +352,7 @@ if (classResult) {
     const annotation = classResult.annotations.get(value);
     console.log(`  ${value}: ${annotation || '(no description)'}`);
   }
-  
+
   // Check if a specific value exists
   if (classResult.values.includes('class.ship')) {
     console.log('class.ship is a valid enumeration value');
@@ -361,6 +378,26 @@ schema.dispose();
 **Note**: Not recommended for frequent use in performance-sensitive scenarios.
 
 #### Static Methods
+
+##### `XsdReference.getElementLocation(element: Element): { uri: string; line: number; column: number }`
+
+Get the source file URI and 1-based position for a schema element definition.
+
+```typescript
+// Obtain an element definition first
+const def = xsdRef.getElementDefinition('aiscripts', 'do_if', ['actions', 'attention', 'aiscript']);
+
+if (def) {
+  const loc = XsdReference.getElementLocation(def);
+  // Example output: file:///C:/path/to/tests/data/xsd/aiscripts.xsd:123:5
+  console.log(`${loc.uri}:${loc.line}:${loc.column}`);
+}
+```
+
+Notes:
+
+- uri is a file:// URI pointing to the XSD file that defined the element.
+- line and column are 1-based positions within that file.
 
 ##### `XsdReference.validateAttributeNames(attributeInfos: EnhancedAttributeInfo[], providedAttributes: string[]): AttributeNameValidationResult`
 
