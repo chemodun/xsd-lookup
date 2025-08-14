@@ -1,10 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Schema, AttributeInfo, EnhancedAttributeInfo, AttributeValidationResult } from './Schema';
+import { Schema, ElementLocation, AttributeInfo, EnhancedAttributeInfo, AttributeValidationResult } from './Schema';
 import { XsdDetector } from './XsdDetector';
 
 // Re-export interfaces from Schema for public API
-export type { AttributeInfo, EnhancedAttributeInfo, AttributeValidationResult };
+export type { ElementLocation, AttributeInfo, EnhancedAttributeInfo, AttributeValidationResult };
 
 /**
  * Interface for attribute name validation results
@@ -150,7 +150,7 @@ export class XsdReference {
    * Get the element source location: file URI and position in the source file.
    * Returns undefined if source file is unknown.
    */
-  public static getElementLocation(element: Element): { uri: string; line: number; column: number } | undefined {
+  public static getElementLocation(element: Element): ElementLocation | undefined {
     return Schema.getElementLocation(element);
   }
 

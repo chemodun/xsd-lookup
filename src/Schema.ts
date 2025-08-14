@@ -30,6 +30,12 @@ interface HierarchyCache {
   elementDefinitionCache: Map<string, Element | undefined>; // New cache for getElementDefinition
 }
 
+export interface ElementLocation {
+  uri: string;
+  line: number;
+  column: number;
+  lengthOfStartTag: number;
+}
 
 export interface AttributeInfo {
   name: string;
@@ -39,9 +45,7 @@ export interface AttributeInfo {
 export interface EnhancedAttributeInfo {
   name: string;
   type?: string;
-  uri?: string;
-  line?: number;
-  column?: number;
+  location?: ElementLocation;
   required?: boolean;
   enumValues?: string[];
   enumValuesAnnotations?: Map<string, string>; // Map of enum value to its annotation text
@@ -156,6 +160,7 @@ export class Schema {
     }
   }
 
+
   /**
    * Load and parse an XML file into a DOM Document
    * @param filePath The path to the XML file to load
@@ -164,29 +169,45 @@ export class Schema {
   private loadXml(filePath: string): Document {
     const xml = fs.readFileSync(filePath, 'utf8');
     const doc = new DOMParser().parseFromString(xml, 'application/xml') as any;
-    // Annotate all elements in this document with their source file path so callers can resolve origin
-    try {
-      const annotate = (node: Node) => {
-        if (!node) return;
-        if (node.nodeType === 1) {
-          const el = node as Element;
-          // Store as a non-XSD attribute to avoid interfering with schema semantics
-          if (!el.getAttribute('data-source-file')) {
-            el.setAttribute('data-source-file', filePath);
+    // Pre-split file into lines for faster per-line operations
+    const lines = xml.split(/\r\n|\r|\n/);
+    const linesCount = lines.length;
+      // Annotate all elements in this document with their source file path so callers can resolve origin
+      try {
+        const annotate = (node: Node) => {
+          if (!node) return;
+          if (node.nodeType === 1) {
+            const el = node as Element;
+            // Store as a non-XSD attribute to avoid interfering with schema semantics
+            if (!el.getAttribute('data-source-file')) {
+              el.setAttribute('data-source-file', filePath);
+            }
+            const anyEl = el as any;
+            const line: number | undefined = anyEl.lineNumber ?? anyEl.line;
+            const column: number | undefined = anyEl.columnNumber ?? anyEl.column;
+            if (typeof line === 'number' && typeof column === 'number' && line >= 1 && line <= linesCount && column >= 1 && !el.getAttribute('start-tag-length')) {
+              const lineStr = lines[line - 1];
+              if (column <= lineStr.length && lineStr[column - 1] === '<') {
+                const closingTagIdx = lineStr.indexOf('>', column - 1);
+                const length = closingTagIdx >= 0 ? closingTagIdx - (column - 1) + 1 : lineStr.length - (column - 1);
+                if (typeof closingTagIdx === 'number') {
+                  el.setAttribute('start-tag-length', String(length));
+                }
+              }
+            }
           }
-        }
-        // Recurse children
-        // eslint-disable-next-line @typescript-eslint/prefer-for-of
-        for (let i = 0; i < (node.childNodes ? node.childNodes.length : 0); i++) {
-          annotate(node.childNodes[i]);
-        }
-      };
-      if (doc && doc.documentElement) annotate(doc.documentElement);
-    } catch {
-      // Best-effort; if annotation fails, we still return the parsed document
+          // Recurse children
+          // eslint-disable-next-line @typescript-eslint/prefer-for-of
+          for (let i = 0; i < (node.childNodes ? node.childNodes.length : 0); i++) {
+            annotate(node.childNodes[i]);
+          }
+        };
+        if (doc && doc.documentElement) annotate(doc.documentElement);
+      } catch {
+        // Best-effort; if annotation fails, we still return the parsed document
+      }
+      return doc;
     }
-    return doc;
-  }
 
   /**
    * Merge included XSD documents into the main schema document
@@ -1222,12 +1243,7 @@ export class Schema {
       };
 
       // Get element location information
-      const location = Schema.getElementLocation(attr.node);
-      if (location) {
-        enhancedAttr.uri = location.uri;
-        enhancedAttr.line = location.line;
-        enhancedAttr.column = location.column;
-      }
+      enhancedAttr.location = Schema.getElementLocation(attr.node);
 
       // Extract attribute's own annotation
       const annotation = Schema.extractAnnotationText(attr.node);
@@ -2068,23 +2084,33 @@ export class Schema {
 
   /**
    * Get the element source location: file URI and position in the source file.
-   * Uses the 'data-source-file' annotation (added during XSD load) and line/column info on the Element.
+   * Uses the 'data-source-file' and 'start-tag-length' annotations (added during XSD load) and line/column info on the Element.
    * Returns undefined if source file is unknown.
    */
-  public static getElementLocation(element: Element): { uri: string; line: number; column: number } | undefined {
+  public static getElementLocation(element: Element): ElementLocation | undefined {
     if (!element) return undefined;
     const filePath = element.getAttribute && element.getAttribute('data-source-file');
     if (!filePath) return undefined;
-    const uri = pathToFileURL(filePath).toString();
+    const location: ElementLocation = {
+      uri: pathToFileURL(filePath).toString(),
+      line: 1,
+      column: 1,
+      lengthOfStartTag: 1
+    };
 
     // Read line/column if provided by the DOM parser; fall back to 1-based defaults.
     const anyEl = element as any;
     let line: number | undefined = anyEl.lineNumber ?? anyEl.line;
     let column: number | undefined = anyEl.columnNumber ?? anyEl.col ?? anyEl.column;
-    if (typeof line !== 'number' || isNaN(line)) line = 1;
-    if (typeof column !== 'number' || isNaN(column)) column = 1;
-
-    return { uri, line, column };
+    if (typeof line !== 'number' || isNaN(line)) return undefined;
+    if (typeof column !== 'number' || isNaN(column)) return undefined;
+    location.line = line;
+    location.column = column;
+    const lengthAttr = element.getAttribute('start-tag-length');
+    if (!(lengthAttr === null || lengthAttr === undefined)) {
+      location.lengthOfStartTag = parseInt(lengthAttr, 10) || 1;
+    }
+    return location;
   }
 
   /**

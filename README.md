@@ -73,10 +73,20 @@ export interface AttributeInfo {
   node: Element; // DOM element reference
 }
 
+// Location of a schema element definition
+interface ElementLocation {
+  uri: string;         // file:// URI to the XSD file
+  line: number;        // 1-based
+  column: number;      // 1-based
+  lengthOfStartTag: number; // number of characters in the element's start tag
+}
+
 // Enhanced attribute information with validation rules
 interface EnhancedAttributeInfo {
   name: string;
   type?: string;
+  // Location packaged as a single object
+  location?: ElementLocation;
   required?: boolean;
   patterns?: string[];
   enumValues?: string[];
@@ -88,10 +98,6 @@ interface EnhancedAttributeInfo {
   maxInclusive?: number;
   minExclusive?: number;
   maxExclusive?: number;
-  // Location of attribute definition in the XSD
-  uri?: string;
-  line?: number;
-  column?: number;
 }
 
 // Attribute validation result
@@ -230,7 +236,7 @@ Get all attributes for an element with complete type information including:
 - Enumeration values (if applicable)
 - Pattern restrictions
 - Numeric/length constraints
-- Attribute definition location (file URI, line, column)
+- Attribute definition location (file URI, line, column, lengthOfStartTag)
 - Attribute annotation text (if available)
 
 **Important**: The `hierarchy` parameter should be provided in **bottom-up order** (from immediate parent to root element).
@@ -247,9 +253,12 @@ const attributes: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes
 //   patterns: ['[pattern regex]'],
 //   enumValues: undefined,
 //   annotation: 'Description text...'(optional),
-//   uri: 'file:///C:/path/to/aiscripts.xsd',
-//   line: 123,
-//   column: 5
+//   location: {
+//     uri: 'file:///C:/path/to/aiscripts.xsd',
+//     line: 123,
+//     column: 5,
+//     lengthOfStartTag: 42
+//   }
 // }
 // ...]
 ```
@@ -379,7 +388,7 @@ schema.dispose();
 
 #### Static Methods
 
-##### `XsdReference.getElementLocation(element: Element): { uri: string; line: number; column: number }`
+##### `XsdReference.getElementLocation(element: Element): ElementLocation`
 
 Get the source file URI and 1-based position for a schema element definition.
 
@@ -391,6 +400,8 @@ if (def) {
   const loc = XsdReference.getElementLocation(def);
   // Example output: file:///C:/path/to/tests/data/xsd/aiscripts.xsd:123:5
   console.log(`${loc.uri}:${loc.line}:${loc.column}`);
+  // Start tag length is also available when you need precise range handling
+  // console.log('start tag length:', loc.lengthOfStartTag);
 }
 ```
 
@@ -398,6 +409,7 @@ Notes:
 
 - uri is a file:// URI pointing to the XSD file that defined the element.
 - line and column are 1-based positions within that file.
+- lengthOfStartTag is the character length of the element’s start tag (from '<' to the matching '>').
 
 ##### `XsdReference.validateAttributeNames(attributeInfos: EnhancedAttributeInfo[], providedAttributes: string[]): AttributeNameValidationResult`
 
