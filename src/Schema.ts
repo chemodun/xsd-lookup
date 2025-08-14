@@ -2308,36 +2308,35 @@ export class Schema {
     const allChildren = this.getChildElementsCached(parentDef);
     if (allChildren.length === 0) return false;
 
-    let allowedChildren: Element[];
+    // Find the concrete Element node for the requested child; if not declared, it's invalid
+    const candidate = allChildren.find(el => el.getAttribute('name') === elementName);
+    if (!candidate) return false;
 
-    if (previousSibling) {
-      // Apply sequence/choice filtering based on previous sibling
-      allowedChildren = this.filterElementsBySequenceConstraints(parentDef, allChildren, previousSibling);
-    } else {
-      // No previous sibling: compute start-capable elements based on the content model
-      const contentModel = this.getCachedContentModel(parentDef);
-      if (contentModel) {
-        const modelType = contentModel.nodeName;
-        if (modelType === 'xs:choice') {
-          allowedChildren = this.getElementsInChoice(contentModel, allChildren);
-        } else if (modelType === 'xs:sequence') {
-          allowedChildren = this.getStartElementsOfSequence(contentModel, allChildren);
-        } else if (modelType === 'xs:all') {
-          allowedChildren = allChildren;
-        } else {
-          allowedChildren = allChildren;
-        }
-      } else {
-        allowedChildren = allChildren;
+    // If there is no ordering constraint or xs:all, declaration is sufficient
+    const contentModel = this.getCachedContentModel(parentDef);
+    if (!previousSibling) {
+      if (!contentModel) return true; // fallback: treat as any declared child allowed at start
+      const modelType = contentModel.nodeName;
+      if (modelType === 'xs:all') return true; // ordering-free
+      if (modelType === 'xs:choice') {
+        // Check if the candidate can start any alternative in the choice
+        return this.getElementsInChoice(contentModel, [candidate]).length > 0;
       }
+      if (modelType === 'xs:sequence') {
+        // Check if the candidate can start the sequence (respecting minOccurs chain)
+        return this.getStartElementsOfSequence(contentModel, [candidate]).length > 0;
+      }
+      // Unknown model type: be permissive like getPossibleChildElements fallback
+      return true;
     }
 
-    // Determine presence by name
-    for (const el of allowedChildren) {
-      const name = el.getAttribute('name');
-      if (name === elementName) return true;
-    }
-    return false;
+    // There is a previous sibling; handle ordering constraints efficiently by filtering only the candidate
+    if (!contentModel) return true; // no model => allow any declared child after previous
+    if (contentModel.nodeName === 'xs:all') return true; // xs:all has no ordering between children
+
+    // Run the full constraint engine but only against the single candidate element
+    const allowed = this.filterElementsBySequenceConstraints(parentDef, [candidate], previousSibling);
+    return allowed.length > 0;
   }
 
   /**
