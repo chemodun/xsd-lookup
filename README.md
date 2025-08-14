@@ -12,6 +12,7 @@ Developed to support scripting language validation in **X4: Foundations** game m
 - **🔗 Type Inheritance Support**: Handles complex XSD type hierarchies and restrictions
 - **🧩 Hierarchical Context**: Getting list of possible child elements based on current element hierarchy
 - **🔄 Previous Sibling Context**: Optional previous sibling element name to filter results based on sequence constraints
+- **⚡ Fast Child Validity Check**: Direct API to check if a specific child is valid under a parent (with optional previous sibling)
 - **🔀 Union Type Processing**: Merges validation rules from multiple member types
 - **📋 Enumeration Support**: Complete enumeration value extraction and validation with annotations
 - **🎯 SimpleType Enumeration Discovery**: Extract enumeration values from named SimpleTypes, including union types
@@ -302,6 +303,29 @@ if (children.size > 0) {
     console.log(`  ${elementName}: ${annotation || '(no description)'}`);
   }
 }
+```
+
+##### `isValidChild(schemaName: string, elementName: string, parentName: string, parentHierarchy?: string[], previousSibling?: string): boolean`
+
+Check if a specific element is valid as a child of a given parent in the provided hierarchy, using the same engine and sequence/choice constraints as `getPossibleChildElements`, but without building the full child set.
+
+**Important**: The `parentHierarchy` parameter should be provided in **bottom-up order** (from immediate parent to root element).
+**Important**: The optional `previousSibling` parameter narrows the check to respect sequence constraints within the parent’s content model.
+
+```typescript
+// Validate if 'do_else' can follow 'do_if' inside <actions>
+const ok = xsdRef.isValidChild(
+  'aiscripts',
+  'do_else',
+  'actions',
+  ['attention', 'aiscript'],
+  'do_if'
+);
+console.log('do_else after do_if is', ok ? 'allowed' : 'not allowed');
+
+// Check if 'do_if' can start under <actions> (no previousSibling)
+const canStart = xsdRef.isValidChild('aiscripts', 'do_if', 'actions', ['attention', 'aiscript']);
+console.log('do_if at start of <actions> is', canStart ? 'allowed' : 'not allowed');
 ```
 
 ##### `getSimpleTypesWithBaseType(schemaName: string, baseType: string): string[]`
