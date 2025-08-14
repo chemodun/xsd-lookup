@@ -28,6 +28,11 @@ interface HierarchyCache {
   attributeCache: Map<string, AttributeInfo[]>;
   hierarchyValidation: Map<string, boolean>;
   elementDefinitionCache: Map<string, Element | undefined>; // New cache for getElementDefinition
+  // Performance caches (not size-limited via ensureCacheSize):
+  childElementsByDef?: WeakMap<Element, Element[]>; // cache of findAllElementsInDefinition
+  contentModelCache?: WeakMap<Element, Element | null>; // cache of findContentModel
+  annotationCache?: WeakMap<Element, string>; // cache of extractAnnotationText/type fallback
+  possibleChildrenResultCache?: Map<string, Map<string, string>>; // cache final results per key
 }
 
 export interface ElementLocation {
@@ -108,7 +113,11 @@ export class Schema {
       elementSearchResults: new Map(),
       attributeCache: new Map(),
       hierarchyValidation: new Map(),
-      elementDefinitionCache: new Map()
+  elementDefinitionCache: new Map(),
+  childElementsByDef: new WeakMap<Element, Element[]>(),
+  contentModelCache: new WeakMap<Element, Element | null>(),
+  annotationCache: new WeakMap<Element, string>(),
+  possibleChildrenResultCache: new Map<string, Map<string, string>>()
     };
   }
 
@@ -2188,48 +2197,47 @@ export class Schema {
    * @returns Map where key is child element name and value is its annotation text
    */
   public getPossibleChildElements(elementName: string, hierarchy: string[] = [], previousSibling?: string): Map<string, string> {
+    const t0 = (globalThis.performance?.now?.() ?? Date.now());
+    let tDef = 0, tFindAll = 0, tFilter = 0, tAnnot = 0;
+
     // Create cache key including previousSibling for proper caching
     const siblingKey = previousSibling ? `prev:${previousSibling}` : 'noprev';
     const cacheKey = `children:${elementName}:${hierarchy.join('>')}:${siblingKey}`;
 
-    // Check if we have this in cache (reuse existing cache structure)
-    if (this.cache.elementSearchResults.has(cacheKey)) {
-      const cachedResult = this.cache.elementSearchResults.get(cacheKey);
-      if (cachedResult) {
-        const resultMap = new Map<string, string>();
-        for (const elem of cachedResult) {
-          const name = elem.getAttribute('name');
-          const annotation = elem.getAttribute('data-annotation') || '';
-          if (name) {
-            resultMap.set(name, annotation);
-          }
-        }
-        return resultMap;
-      }
-      return new Map<string, string>();
+    // Fast-path cache for final result
+    const resCache = this.cache.possibleChildrenResultCache;
+    const cachedMap = resCache?.get(cacheKey);
+    if (cachedMap) {
+      return new Map(cachedMap);
     }
 
     // Get the element definition using the same logic as other methods
+    const tDef0 = (globalThis.performance?.now?.() ?? Date.now());
     const elementDef = this.getElementDefinition(elementName, hierarchy);
+    tDef += (globalThis.performance?.now?.() ?? Date.now()) - tDef0;
 
     if (!elementDef) {
-      // Cache empty result
-      this.cache.elementSearchResults.set(cacheKey, []);
-      this.ensureCacheSize();
+      // Cache empty result (new cache)
+      resCache?.set(cacheKey, new Map());
       return new Map<string, string>();
     }
 
     // Get all possible child elements
-    const childElements = this.findAllElementsInDefinition(elementDef);
+    const tFindAll0 = (globalThis.performance?.now?.() ?? Date.now());
+    const childElements = this.getChildElementsCached(elementDef);
+    tFindAll += (globalThis.performance?.now?.() ?? Date.now()) - tFindAll0;
 
     let filteredElements: Element[];
 
     // If previousSibling is provided, filter based on sequence/choice constraints
     if (previousSibling) {
+      const tFilter0 = (globalThis.performance?.now?.() ?? Date.now());
       filteredElements = this.filterElementsBySequenceConstraints(elementDef, childElements, previousSibling);
+      tFilter += (globalThis.performance?.now?.() ?? Date.now()) - tFilter0;
     } else {
       // No previous sibling: honor the content model and only return start-capable elements
-      const contentModel = this.findContentModel(elementDef);
+      const tFilter0 = (globalThis.performance?.now?.() ?? Date.now());
+      const contentModel = this.getCachedContentModel(elementDef);
       if (contentModel) {
         const modelType = contentModel.nodeName;
         if (modelType === 'xs:choice') {
@@ -2245,39 +2253,35 @@ export class Schema {
       } else {
         filteredElements = childElements;
       }
+      tFilter += (globalThis.performance?.now?.() ?? Date.now()) - tFilter0;
     }
 
     const result = new Map<string, string>();
 
     // Build result map with annotations
+    const tAnnot0 = (globalThis.performance?.now?.() ?? Date.now());
     for (const element of filteredElements) {
       const name = element.getAttribute('name');
-      if (name) {
-        let annotation = Schema.extractAnnotationText(element);
-        // If no direct annotation, try to get it from the element's type
-        if (!annotation) {
-          const typeName = element.getAttribute('type');
-          if (typeName) {
-            const typeDef = this.schemaIndex.types[typeName];
-            if (typeDef) {
-              annotation = Schema.extractAnnotationText(typeDef);
-            }
-          }
-        }
-        result.set(name, annotation || '');
-      }
+      if (!name) continue;
+      const annotation = this.getAnnotationCached(element);
+      result.set(name, annotation);
     }
+    tAnnot += (globalThis.performance?.now?.() ?? Date.now()) - tAnnot0;
 
-    // Cache the result as Element array (for consistency with existing cache structure)
-    const elementArray = Array.from(result.entries()).map(([name, annotation]) => {
-      // Create a mock element for caching with annotation data
-      const mockElem = this.doc.createElement('element');
-      mockElem.setAttribute('name', name);
-      mockElem.setAttribute('data-annotation', annotation);
-      return mockElem;
-    });
-    this.cache.elementSearchResults.set(cacheKey, elementArray);
-    this.ensureCacheSize();
+    // Cache the final result map for fast retrieval
+    resCache?.set(cacheKey, new Map(result));
+
+    // Optional profiling output
+    if ((process.env.XSDL_PROFILE_CHILDREN || '').trim() === '1') {
+      const t1 = (globalThis.performance?.now?.() ?? Date.now());
+      const total = (t1 - t0).toFixed(3);
+      const out = [
+        `getPossibleChildElements(${elementName}) -> ${result.size} children in ${total}ms`,
+        `  def: ${tDef.toFixed(3)}ms, findAll: ${tFindAll.toFixed(3)}ms, filter: ${tFilter.toFixed(3)}ms, annotations: ${tAnnot.toFixed(3)}ms`
+      ];
+      // eslint-disable-next-line no-console
+      console.log(out.join('\n'));
+    }
 
     return result;
   }
@@ -2290,8 +2294,8 @@ export class Schema {
    * @returns Filtered array of elements that are valid as next elements
    */
   private filterElementsBySequenceConstraints(elementDef: Element, allChildren: Element[], previousSibling: string): Element[] {
-    // Find the content model (sequence/choice) within the element definition
-    const contentModel = this.findContentModel(elementDef);
+  // Find the content model (sequence/choice) within the element definition (cached)
+  const contentModel = this.getCachedContentModel(elementDef);
 
     if (!contentModel) {
       // If no content model found, return all children (fallback)
@@ -2357,11 +2361,49 @@ export class Schema {
     if (typeAttr && !this.isBuiltInXsdType(typeAttr)) {
       const typeDef = this.schemaIndex.types[typeAttr] || this.schemaIndex.types[typeAttr.replace(/^.*:/, '')];
       if (typeDef) {
-  return this.findContentModel(typeDef);
+        return this.findContentModel(typeDef);
       }
     }
 
     return null;
+  }
+
+  // Cached content model resolver
+  private getCachedContentModel(def: Element): Element | null {
+    const cache = this.cache.contentModelCache!;
+    if (cache.has(def)) return cache.get(def)!;
+    const model = this.findContentModel(def);
+    cache.set(def, model);
+    return model;
+  }
+
+  // Cached child elements discovery
+  private getChildElementsCached(def: Element): Element[] {
+    const cache = this.cache.childElementsByDef!;
+    const cached = cache.get(def);
+    if (cached) return cached;
+    const elems = this.findAllElementsInDefinition(def);
+    cache.set(def, elems);
+    return elems;
+  }
+
+  // Cached annotation extraction with type fallback
+  private getAnnotationCached(el: Element): string {
+    const cache = this.cache.annotationCache!;
+    const existing = cache.get(el);
+    if (existing !== undefined) return existing;
+    let annotation = Schema.extractAnnotationText(el) || '';
+    if (!annotation) {
+      const typeName = el.getAttribute('type');
+      if (typeName) {
+        const typeDef = this.schemaIndex.types[typeName];
+        if (typeDef) {
+          annotation = Schema.extractAnnotationText(typeDef) || '';
+        }
+      }
+    }
+    cache.set(el, annotation);
+    return annotation;
   }
 
   /**
