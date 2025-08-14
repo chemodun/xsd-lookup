@@ -517,6 +517,30 @@ export class XsdReference {
     return schema.getPossibleChildElements(elementName, hierarchy, previousSibling);
   }
 
+/**
+   * Check if a specific element is valid as a child of a given parent in the provided hierarchy,
+   * using the same engine and constraints as getPossibleChildElements, but without calling it directly.
+   *
+   * Contract:
+   * - Inputs: elementName, parentName, parentHierarchy (bottom-up: [immediate_parent, ..., root]), optional previousSibling
+   * - Output: boolean indicating if elementName can appear next under parentName respecting content model and sequence rules
+   */
+  public isValidChild(
+    schemaName: string,
+    elementName: string,
+    parentName: string,
+    parentHierarchy: string[] = [],
+    previousSibling?: string
+  ): boolean {
+    const schema = this.loadSchema(schemaName);
+    if (!schema) {
+      return false;
+    }
+
+    // Check if the element is valid under the parent element
+    return schema.isValidChild(elementName, parentName, parentHierarchy, previousSibling);
+  }
+
   /**
    * Extract annotation text from an XML element.
    * This static method provides access to Schema's annotation extraction functionality.

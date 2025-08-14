@@ -2287,6 +2287,60 @@ export class Schema {
   }
 
   /**
+   * Check if a specific element is valid as a child of a given parent in the provided hierarchy,
+   * using the same engine and constraints as getPossibleChildElements, but without calling it directly.
+   *
+   * Contract:
+   * - Inputs: elementName, parentName, parentHierarchy (bottom-up: [immediate_parent, ..., root]), optional previousSibling
+   * - Output: boolean indicating if elementName can appear next under parentName respecting content model and sequence rules
+   */
+  public isValidChild(
+    elementName: string,
+    parentName: string,
+    parentHierarchy: string[] = [],
+    previousSibling?: string
+  ): boolean {
+    // Resolve the parent element definition within the provided hierarchy
+    const parentDef = this.getElementDefinition(parentName, parentHierarchy);
+    if (!parentDef) return false;
+
+    // Discover all immediate child element candidates (cached)
+    const allChildren = this.getChildElementsCached(parentDef);
+    if (allChildren.length === 0) return false;
+
+    let allowedChildren: Element[];
+
+    if (previousSibling) {
+      // Apply sequence/choice filtering based on previous sibling
+      allowedChildren = this.filterElementsBySequenceConstraints(parentDef, allChildren, previousSibling);
+    } else {
+      // No previous sibling: compute start-capable elements based on the content model
+      const contentModel = this.getCachedContentModel(parentDef);
+      if (contentModel) {
+        const modelType = contentModel.nodeName;
+        if (modelType === 'xs:choice') {
+          allowedChildren = this.getElementsInChoice(contentModel, allChildren);
+        } else if (modelType === 'xs:sequence') {
+          allowedChildren = this.getStartElementsOfSequence(contentModel, allChildren);
+        } else if (modelType === 'xs:all') {
+          allowedChildren = allChildren;
+        } else {
+          allowedChildren = allChildren;
+        }
+      } else {
+        allowedChildren = allChildren;
+      }
+    }
+
+    // Determine presence by name
+    for (const el of allowedChildren) {
+      const name = el.getAttribute('name');
+      if (name === elementName) return true;
+    }
+    return false;
+  }
+
+  /**
    * Filter child elements based on XSD sequence constraints and previous sibling
    * @param elementDef The parent element definition
    * @param allChildren All possible child elements

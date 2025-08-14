@@ -256,8 +256,8 @@ function validateElement(schemaName, elementInfo, filePath) {
   if (parentName) {
     const parentBottomUp = bottomUpHierarchy.slice(1); // parent's own bottom-up hierarchy (its parents only)
     const prev = elementInfo.previousSibling || undefined;
-    const allowedChildren = xsdRef.getPossibleChildElements(schemaName, parentName, parentBottomUp, prev);
-    if (!allowedChildren.has(name)) {
+    const allowedChildren = xsdRef.isValidChild(schemaName, name, parentName, parentBottomUp, prev);
+    if (!allowedChildren) {
       const where = `parent: '${parentName}'` + (prev ? `, previous sibling: '${prev}'` : ', first child');
       const errorMsg = `Element '${name}' is not allowed here under ${where}`;
       const errorDetails = `Parent hierarchy: [${parentBottomUp.join(' > ')}], File: ${filePath}`;
