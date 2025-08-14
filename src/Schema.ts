@@ -728,7 +728,9 @@ export class Schema {
 
     // Check if we have an exact match in cache
     if (this.cache.elementDefinitionCache.has(fullCacheKey)) {
-      return this.cache.elementDefinitionCache.get(fullCacheKey);
+      const cached = this.cache.elementDefinitionCache.get(fullCacheKey);
+      if (cached) this.enrichElementAnnotationFromTypeIfMissing(cached);
+      return cached;
     }
 
     // Check for partial matches in cache - look for any cached key that starts with our element name
@@ -805,11 +807,108 @@ export class Schema {
       }
     }
 
+    // If found, enrich with annotation structure from referenced type when missing
+    if (result) {
+      this.enrichElementAnnotationFromTypeIfMissing(result);
+    }
+
     // Cache the final result (even if undefined)
     this.cache.elementDefinitionCache.set(fullCacheKey, result);
     this.ensureCacheSize();
 
     return result;
+  }
+
+  // Clone xs:annotation/xs:documentation from the referenced type onto the element
+  // if the element lacks its own annotation with text. No hardcoding: fully data-driven by XSD.
+  private enrichElementAnnotationFromTypeIfMissing(elementDef: Element): void {
+    if (!elementDef || elementDef.nodeType !== 1) return;
+    const ns = 'xs:';
+    if (elementDef.nodeName !== ns + 'element') return;
+
+    // Already enriched or already has an annotation node
+    if ((elementDef as Element).getAttribute('data-annotation-enriched') === '1') return;
+    for (let i = 0; i < elementDef.childNodes.length; i++) {
+      const c = elementDef.childNodes[i];
+      if (c.nodeType === 1 && (c as Element).nodeName === ns + 'annotation') {
+        // Has its own annotation structure already
+        // Additionally ensure it has text; if empty, we still respect existing structure and don't override
+        return;
+      }
+    }
+
+    const typeName = elementDef.getAttribute('type');
+    if (!typeName) return;
+    const unprefixed = typeName.replace(/^.*:/, '');
+    const typeDef = this.schemaIndex.types[typeName] || this.schemaIndex.types[unprefixed];
+    if (!typeDef) return;
+
+    // Ensure the type actually contains documentation text
+    const typeDocText = Schema.extractAnnotationText(typeDef);
+    if (!typeDocText || typeDocText.trim() === '') return;
+
+    // Find an annotation element to clone (prefer direct child)
+    const typeAnnotationEl = this.findFirstAnnotationElement(typeDef);
+    if (!typeAnnotationEl) return;
+
+    const cloned = typeAnnotationEl.cloneNode(true);
+    try {
+      elementDef.appendChild(cloned);
+      (elementDef as Element).setAttribute('data-annotation-enriched', '1');
+      // Sync annotation cache so getAnnotationCached returns the new text immediately
+      if (this.cache && this.cache.annotationCache) {
+        this.cache.annotationCache.set(elementDef, typeDocText);
+      }
+    } catch {
+      // Ignore DOM append errors silently; non-critical enhancement
+    }
+  }
+
+  // Locate the first xs:annotation element in the given node (direct child preferred, otherwise bounded DFS)
+  private findFirstAnnotationElement(node: Element): Element | null {
+    const ns = 'xs:';
+    // Prefer direct child annotation
+    for (let i = 0; i < node.childNodes.length; i++) {
+      const c = node.childNodes[i];
+      if (c.nodeType === 1 && (c as Element).nodeName === ns + 'annotation') {
+        // Ensure documentation with some text exists inside
+        const hasDocText = this.annotationElementHasText(c as Element);
+        if (hasDocText) return c as Element;
+      }
+    }
+    // Bounded DFS to avoid heavy scans
+    const stack: { el: Element; depth: number }[] = [];
+    for (let i = 0; i < node.childNodes.length; i++) {
+      const c = node.childNodes[i];
+      if (c.nodeType === 1) stack.push({ el: c as Element, depth: 1 });
+    }
+    const maxDepth = 4;
+    while (stack.length) {
+      const { el, depth } = stack.pop()!;
+      if (el.nodeName === ns + 'annotation' && this.annotationElementHasText(el)) {
+        return el;
+      }
+      if (depth >= maxDepth) continue;
+      for (let i = 0; i < el.childNodes.length; i++) {
+        const c = el.childNodes[i];
+        if (c.nodeType === 1) stack.push({ el: c as Element, depth: depth + 1 });
+      }
+    }
+    return null;
+  }
+
+  // Check if an xs:annotation element contains xs:documentation with non-empty text
+  private annotationElementHasText(annotationEl: Element): boolean {
+    const ns = 'xs:';
+    for (let i = 0; i < annotationEl.childNodes.length; i++) {
+      const child = annotationEl.childNodes[i];
+      if (child.nodeType === 1 && (child as Element).nodeName === ns + 'documentation') {
+        const docEl = child as Element;
+        const text = (docEl.textContent || '').trim();
+        if (text.length > 0) return true;
+      }
+    }
+    return false;
   }
 
   /**
