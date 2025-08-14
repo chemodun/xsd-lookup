@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.6.1...xsd-lookup@v1.7.0) (2025-08-14)
+
+
+### Features
+
+* **Schema:** add source location annotation to XML elements ([8fadeed](https://github.com/chemodun/xsd-lookup/commit/8fadeed7711110b76136d3d1c38baf8f257da3e6))
+* **XsdReference:** expose element location retrieval ([8fadeed](https://github.com/chemodun/xsd-lookup/commit/8fadeed7711110b76136d3d1c38baf8f257da3e6))
+
 ## [1.6.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.6.0...xsd-lookup@v1.6.1) (2025-08-13)
 
 ### Bug Fixes
