@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.9.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.9.0...xsd-lookup@v1.9.1) (2025-08-14)
+
+### Bug Fixes
+
+* **README:** add Fast Child Validity Check feature in documentation ([cba3313](https://github.com/chemodun/xsd-lookup/commit/cba3313da4a8480aa7dfc124c405fffd9848a43c))
+
 ## [1.9.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.8.0...xsd-lookup@v1.9.0) (2025-08-14)
 
 ### Features
