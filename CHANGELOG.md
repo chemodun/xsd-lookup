@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.9.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.8.0...xsd-lookup@v1.9.0) (2025-08-14)
+
+### Features
+
+* **Schema:** add isValidChild method for child element validation ([5124597](https://github.com/chemodun/xsd-lookup/commit/5124597bf8308fba32a7110707e401d7a24c343b))
+* **XsdReference:** implement isValidChild method for schema validation ([5124597](https://github.com/chemodun/xsd-lookup/commit/5124597bf8308fba32a7110707e401d7a24c343b))
+
+### Code Refactoring
+
+* **Schema:** enhance caching for child elements and annotations ([ee9df10](https://github.com/chemodun/xsd-lookup/commit/ee9df10930f2c1a9ef5c6ab251e8a9cd67e042b7))
+* **Schema:** optimize isValidChild method for child element validation ([8d306b7](https://github.com/chemodun/xsd-lookup/commit/8d306b72fa30729a00cdcbf32ba136816d417c1a))
+
 ## [1.8.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.7.0...xsd-lookup@v1.8.0) (2025-08-14)
 
 ### Features
