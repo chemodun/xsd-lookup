@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.10.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.9.1...xsd-lookup@v1.10.0) (2025-08-14)
+
+
+### Features
+
+* **Schema:** enrich element annotations from referenced types ([ec2047c](https://github.com/chemodun/xsd-lookup/commit/ec2047cadb46fc0d0c06ccae288a84c5c4e3e02d))
+
+
+### Bug Fixes
+
+* **Schema:** enhance annotation extraction for element types ([f125daa](https://github.com/chemodun/xsd-lookup/commit/f125daa060264079dc4762c37a3d71066e9fb64e))
+
 ## [1.9.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.9.0...xsd-lookup@v1.9.1) (2025-08-14)
 
 ### Bug Fixes
