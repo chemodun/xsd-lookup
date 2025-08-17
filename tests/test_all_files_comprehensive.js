@@ -1,4 +1,4 @@
-const { XsdReference } = require('../dist/XsdReference');
+const { xsdReference, XsdReference } = require('../dist/XsdReference');
 const { XsdDetector } = require('../dist/XsdDetector');
 const fs = require('fs');
 const path = require('path');
@@ -7,7 +7,7 @@ const { DOMParser } = require('@xmldom/xmldom');
 console.log('=== Comprehensive All-Files XSD Validation Test ===\n');
 
 // Initialize the new TypeScript system (XSD directory is now in tests/data/xsd)
-const xsdRef = new XsdReference(path.join(__dirname, 'data', 'xsd'));
+xsdReference.init(path.join(__dirname, 'data', 'xsd'));
 
 // Define test directories
 const testDirs = [
@@ -95,7 +95,7 @@ function generateJUnitXML() {
   xml += `    <property name="pattern_validations_passed" value="${patternValidationStats.passed}" />\n`;
   xml += `    <property name="enumeration_validations_tested" value="${enumValidationStats.tested}" />\n`;
   xml += `    <property name="enumeration_validations_passed" value="${enumValidationStats.passed}" />\n`;
-  xml += `    <property name="loaded_schemas" value="${xsdRef.getAvailableSchemas().join(', ')}" />\n`;
+  xml += `    <property name="loaded_schemas" value="${xsdReference.getAvailableSchemas().join(', ')}" />\n`;
   xml += `    <property name="total_errors_found" value="${errors.length}" />\n`;
   xml += '  </properties>\n';
 
@@ -243,7 +243,7 @@ function validateElement(schemaName, elementInfo, filePath) {
   const bottomUpHierarchy = [...hierarchy].reverse();
 
   // Use the bottom-up hierarchy for validation
-  const elementDef = xsdRef.getElementDefinition(schemaName, name, bottomUpHierarchy);
+  const elementDef = xsdReference.getElementDefinition(schemaName, name, bottomUpHierarchy);
   results.elementValid = elementDef !== undefined;
   if (!results.elementValid) {
     const errorMsg = `Element '${name}' not found in schema`;
@@ -256,7 +256,7 @@ function validateElement(schemaName, elementInfo, filePath) {
   if (parentName) {
     const parentBottomUp = bottomUpHierarchy.slice(1); // parent's own bottom-up hierarchy (its parents only)
     const prev = elementInfo.previousSibling || undefined;
-    const allowedChildren = xsdRef.isValidChild(schemaName, name, parentName, parentBottomUp, prev);
+    const allowedChildren = xsdReference.isValidChild(schemaName, name, parentName, parentBottomUp, prev);
     if (!allowedChildren) {
       const where = `parent: '${parentName}'` + (prev ? `, previous sibling: '${prev}'` : ', first child');
       const errorMsg = `Element '${name}' is not allowed here under ${where}`;
@@ -266,7 +266,7 @@ function validateElement(schemaName, elementInfo, filePath) {
   }
 
   // Get comprehensive attribute information including validation rules
-  const schemaAttributes = xsdRef.getElementAttributesWithTypes(schemaName, name, bottomUpHierarchy);
+  const schemaAttributes = xsdReference.getElementAttributesWithTypes(schemaName, name, bottomUpHierarchy);
 
   // Use the static method to validate attribute names
   const nameValidation = XsdReference.validateAttributeNames(schemaAttributes, attributes);
@@ -782,8 +782,8 @@ if (typeEntries.length > 0) {
 }
 
 console.log(`\n📈 Schema Status:`);
-console.log(`   Loaded schemas: ${xsdRef.getAvailableSchemas().join(', ')}`);
-console.log(`   Discoverable schemas: ${xsdRef.getDiscoverableSchemas().join(', ')}`);
+console.log(`   Loaded schemas: ${xsdReference.getAvailableSchemas().join(', ')}`);
+console.log(`   Discoverable schemas: ${xsdReference.getDiscoverableSchemas().join(', ')}`);
 
 if (errors.length > 0) {
   console.log(`\n❌ ERRORS FOUND (${errors.length}):`);
@@ -801,7 +801,7 @@ console.log('='.repeat(60));
 
 try {
   // Dispose the XSD reference to release resources
-  xsdRef.dispose();
+  xsdReference.dispose();
 }
 catch (error) {
   console.error('Error disposing XSD reference:', error);

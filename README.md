@@ -19,6 +19,7 @@ Developed to support scripting language validation in **X4: Foundations** game m
 - **📏 Range Validation**: Numeric and length constraint validation
 - **🗂️ Multi-line Normalization**: Handles multi-line XML attribute values correctly
 - **📈 Performance Optimized**: Caching and indexing for fast validation
+- **🧰 Singleton Convenience**: Use the exported `xsdReference` instance instead of creating your own
 
 ## 🚀 Quick Start
 
@@ -35,7 +36,8 @@ npm install xsd_lookup --save
 import { XsdReference } from 'xsd_lookup';
 
 // Initialize the validation system
-const xsdRef = new XsdReference('./tests/data/xsd');
+const xsdRef = new XsdReference();
+xsdRef.init('./tests/data/xsd');
 const elementName = 'set_value';
 const elementHierarchy = ['actions', 'attention', 'aiscript']; // Please pay attention to the hierarchy order, it should be bottom-up (from immediate parent to root element)
 
@@ -59,6 +61,24 @@ if (classEnums) {
 
 // Clean up resources when done (optional but recommended)
 xsdRef.dispose();
+```
+
+Alternatively, use the singleton instance:
+
+```typescript
+import { xsdReference } from 'xsd_lookup';
+
+// Initialize once
+xsdReference.init('./tests/data/xsd');
+
+const elementName = 'set_value';
+const elementHierarchy = ['actions', 'attention', 'aiscript'];
+
+const elementDefinition = xsdReference.getElementDefinition('aiscripts', elementName, elementHierarchy);
+const elementAttributes = xsdReference.getElementAttributesWithTypes('aiscripts', elementName, elementHierarchy);
+
+// Clean up when done
+xsdReference.dispose();
 ```
 
 ## 📖 API Reference
@@ -162,7 +182,28 @@ The main entry point for any operations.
 #### Constructor
 
 ```typescript
-new XsdReference(xsdDirectory: string)
+new XsdReference()
+```
+
+##### `init(xsdDirectory: string): void`
+
+Initialize or reinitialize the instance with the directory that contains your .xsd files. This clears any previously loaded schemas.
+
+```typescript
+const xsdRef = new XsdReference();
+xsdRef.init('./tests/data/xsd');
+```
+
+##### Singleton instance
+
+You can also use a ready-to-use singleton and avoid manual instantiation.
+
+```typescript
+import { xsdReference } from 'xsd_lookup';
+
+xsdReference.init('./tests/data/xsd');
+// Then call API methods on xsdReference
+const children = xsdReference.getPossibleChildElements('aiscripts', 'actions', ['attention', 'aiscript']);
 ```
 
 #### Core Methods
@@ -592,7 +633,8 @@ if (elementDef) {
 
 ```typescript
 // 1. Get schema and attribute info once
-const xsdRef = new XsdReference('./tests/data/xsd');
+const xsdRef = new XsdReference();
+xsdRef.init('./tests/data/xsd');
 const attributeInfos: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'attention', 'aiscript']);
 
 // 2. Validate attribute names (fast, no schema lookup needed)
@@ -627,6 +669,11 @@ if (possibleValues.size > 0) {
     console.log('eq annotation:', possibleValues.get('eq') || '(no description)');
   }
 }
+
+// Alternatively, using the singleton
+// import { xsdReference } from 'xsd_lookup';
+// xsdReference.init('./tests/data/xsd');
+// const attributeInfos = xsdReference.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'attention', 'aiscript']);
 ```
 
 ### Schema Class

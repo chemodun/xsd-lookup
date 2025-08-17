@@ -18,7 +18,12 @@ export class XsdReference {
   private schemas: Map<string, Schema> = new Map();
   private xsdDirectory: string;
 
-  constructor(xsdDirectory: string) {
+  constructor() {
+    this.xsdDirectory = '';
+  }
+
+  public init(xsdDirectory: string) {
+    this.dispose();
     this.xsdDirectory = xsdDirectory;
   }
 
@@ -577,3 +582,5 @@ export class XsdReference {
     this.xsdDirectory = ''; // Reset the directory if needed
   }
 }
+
+export const xsdReference: XsdReference = new XsdReference();
