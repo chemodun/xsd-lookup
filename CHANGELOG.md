@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.9.2...xsd-lookup@v1.10.0) (2025-08-17)
+
+### Features
+
+* **xsdReference:** add xsdReference singleton ([54c1b53](https://github.com/chemodun/xsd-lookup/commit/54c1b53e05918b46dd9329322a83ea7f72c3616b))
+* **XsdReference:** simplify constructor and initialization ([54c1b53](https://github.com/chemodun/xsd-lookup/commit/54c1b53e05918b46dd9329322a83ea7f72c3616b))
+
 ## [1.9.2](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.9.1...xsd-lookup@v1.10.0) (2025-08-14)
 
 ### Bug Fixes
