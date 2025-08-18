@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.10.0...xsd-lookup@v1.10.1) (2025-08-18)
+
+
+### Bug Fixes
+
+* **Schema:** enhance previous item repetition logic ([231078f](https://github.com/chemodun/xsd-lookup/commit/231078f5019d49254f91b7738a2a278ba84d6dd3))
+
 ## [1.10.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.9.2...xsd-lookup@v1.10.0) (2025-08-17)
 
 ### Features
