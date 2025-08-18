@@ -2963,31 +2963,38 @@ export class Schema {
 
   // Note: do not override sibling computation by diving into the previous element's inner model here.
 
-    // Check if the previous item can repeat
-    if (previousItem && this.itemCanRepeat(previousItem, previousSibling)) {
-      const ns = 'xs:';
-      if (previousItem.nodeName === ns + 'choice') {
-        // Repeating a choice: allow all alternatives that can start a new occurrence
-        validNext.push(...this.getElementsInChoice(previousItem, allChildren));
-      } else if (previousItem.nodeName === ns + 'group') {
-        // Repeating a group: if it resolves to a choice, allow starting sequence alternatives only
-        const ref = previousItem.getAttribute('ref');
-        const grp = ref ? this.schemaIndex.groups[ref] : previousItem;
-        if (grp) {
-          const model = this.findDirectContentModel(grp);
-          if (model && model.nodeName === ns + 'choice') {
-            // Allow all choice alternatives that can start a new occurrence
-            validNext.push(...this.getElementsInChoice(model, allChildren));
-          } else {
-            // Fallback: repeat the same element
-            const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSibling);
-            if (repeatElement) validNext.push(repeatElement);
+    // Check if the previous item can repeat; use effective maxOccurs (including inheritance from the parent sequence)
+    if (previousItem) {
+      const prevMaxOccurs = this.getEffectiveMaxOccurs(previousItem, sequence);
+      const prevCanRepeat = (prevMaxOccurs === 'unbounded') || (typeof prevMaxOccurs === 'number' && prevMaxOccurs > 1);
+      if (prevCanRepeat) {
+        const ns = 'xs:';
+        if (previousItem.nodeName === ns + 'choice') {
+          // Repeating a choice: allow all alternatives that can start a new occurrence
+          validNext.push(...this.getElementsInChoice(previousItem, allChildren));
+        } else if (previousItem.nodeName === ns + 'group') {
+          // Repeating a group: respect its underlying model
+          const ref = previousItem.getAttribute('ref');
+          const grp = ref ? this.schemaIndex.groups[ref] : previousItem;
+          if (grp) {
+            const model = this.findDirectContentModel(grp);
+            if (model && model.nodeName === ns + 'choice') {
+              validNext.push(...this.getElementsInChoice(model, allChildren));
+            } else if (model && model.nodeName === ns + 'sequence') {
+              validNext.push(...this.getStartElementsOfSequence(model, allChildren));
+            } else {
+              const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSibling);
+              if (repeatElement) validNext.push(repeatElement);
+            }
           }
+        } else if (previousItem.nodeName === ns + 'sequence') {
+          // Repeating a sequence item directly: allow its starts
+          validNext.push(...this.getStartElementsOfSequence(previousItem, allChildren));
+        } else {
+          // Element or other item repeats itself
+          const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSibling);
+          if (repeatElement) validNext.push(repeatElement);
         }
-      } else {
-        // Element or other item repeats itself
-        const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSibling);
-        if (repeatElement) validNext.push(repeatElement);
       }
     }
 
