@@ -3063,63 +3063,6 @@ export class Schema {
     return dedup;
   }
 
-  /**
-   * From the provided choice, return only the start-capable elements of sequence alternatives.
-   * This matches the requirement that after a non-sequence sibling, only the sequence path (do_if...) may start.
-   */
-  private getSequenceStartElementsInChoice(choice: Element, allChildren: Element[]): Element[] {
-    const ns = 'xs:';
-    const result: Element[] = [];
-
-    const collectFromNode = (node: Element) => {
-      if (node.nodeName === ns + 'sequence') {
-        result.push(...this.getStartElementsOfSequence(node, allChildren));
-      } else if (node.nodeName === ns + 'group') {
-        const ref = node.getAttribute('ref');
-        const grp = ref ? this.schemaIndex.groups[ref] : node;
-        if (grp) {
-          const model = this.findDirectContentModel(grp);
-          if (model) {
-            if (model.nodeName === ns + 'sequence') {
-              result.push(...this.getStartElementsOfSequence(model, allChildren));
-            } else if (model.nodeName === ns + 'choice') {
-              // Dive into nested choice to find sequence alternatives
-              for (let k = 0; k < model.childNodes.length; k++) {
-                const alt = model.childNodes[k];
-                if (alt.nodeType === 1) {
-                  collectFromNode(alt as Element);
-                }
-              }
-            }
-          }
-        }
-      } else if (node.nodeName === ns + 'choice') {
-        // Dive into nested choice
-        for (let k = 0; k < node.childNodes.length; k++) {
-          const alt = node.childNodes[k];
-          if (alt.nodeType === 1) {
-            collectFromNode(alt as Element);
-          }
-        }
-      }
-      // Ignore direct element alternatives (e.g., do_all)
-    };
-
-    for (let i = 0; i < choice.childNodes.length; i++) {
-      const child = choice.childNodes[i];
-      if (child.nodeType !== 1) continue;
-      collectFromNode(child as Element);
-    }
-
-    // Deduplicate preserving order
-    const seen = new Set<string>();
-    return result.filter(e => {
-      const name = e.getAttribute('name') || '';
-      if (!name || seen.has(name)) return false;
-      seen.add(name);
-      return true;
-    });
-  }
 
   /**
    * Collect element names that are part of sequence alternatives in a choice but are NOT start elements
@@ -3179,88 +3122,6 @@ export class Schema {
     }
 
     return names;
-  }
-
-  /**
-   * Handle continuation when the previous element defines an inner content model.
-   * Returns the start-capable elements of that inner model, respecting min/maxOccurs.
-   * @param previousItem The previous item in the sequence
-   * @param previousSibling The name of the previous sibling
-   * @param sequenceItems All items in the current sequence
-   * @param previousPosition Position of the previous item
-   * @param allChildren All possible child elements
-   * @returns Remaining valid elements in the inner sequence, or empty array if not applicable
-   */
-  private getRemainingElementsInInnerSequence(
-    previousItem: Element,
-    previousSibling: string,
-    sequenceItems: Element[],
-    previousPosition: number,
-    allChildren: Element[]
-  ): Element[] {
-    // Generic handling: if the previous item defines its own inner content model (sequence/choice/all),
-    // propose the initial elements of that inner model. If those inner elements are all optional,
-    // append other allowed elements from the parent level after prioritizing the inner ones.
-    const ns = 'xs:';
-
-    if (previousItem.nodeName === ns + 'element') {
-      const innerModel = this.findContentModel(previousItem);
-      if (!innerModel) return [];
-
-      const prioritized: Element[] = [];
-      let innerHasRequiredFirst = false;
-
-      if (innerModel.nodeName === ns + 'sequence') {
-        // Collect starting elements of the inner sequence, respecting minOccurs
-        for (let i = 0; i < innerModel.childNodes.length; i++) {
-          const child = innerModel.childNodes[i];
-          if (child.nodeType === 1) {
-            const item = child as Element;
-            const elems = this.getElementsFromSequenceItem(item, allChildren);
-            prioritized.push(...elems);
-            const minOccurs = this.getEffectiveMinOccurs(item, innerModel);
-            if (minOccurs >= 1) {
-              innerHasRequiredFirst = true;
-              break; // Stop at first required inner item
-            }
-          }
-        }
-      } else if (innerModel.nodeName === ns + 'choice') {
-        prioritized.push(...this.getElementsInChoice(innerModel, allChildren));
-        // In a choice, typically one option is required unless minOccurs=0 on the choice itself
-        innerHasRequiredFirst = parseInt(innerModel.getAttribute('minOccurs') || '1') >= 1;
-      } else if (innerModel.nodeName === ns + 'all') {
-        // For xs:all, any element can appear; treat as optional set
-        for (let i = 0; i < innerModel.childNodes.length; i++) {
-          const child = innerModel.childNodes[i];
-          if (child.nodeType === 1) {
-            const item = child as Element;
-            const elems = this.getElementsFromSequenceItem(item, allChildren);
-            prioritized.push(...elems);
-          }
-        }
-        innerHasRequiredFirst = false;
-      }
-
-      // De-duplicate prioritized while preserving order
-      const seen = new Set<string>();
-      const dedupPrioritized = prioritized.filter(e => {
-        const name = e.getAttribute('name') || '';
-        if (seen.has(name)) return false;
-        seen.add(name);
-        return true;
-      });
-
-      if (dedupPrioritized.length === 0) return [];
-
-      // If inner start is all optional, append other elements from parent level
-      // If inner start is all optional, do NOT include unrelated alternatives from parent choice here.
-      // Only return the inner start-capable elements; the outer sequence logic will handle following items.
-
-      return dedupPrioritized;
-    }
-
-    return [];
   }
 
   /**
@@ -3400,31 +3261,6 @@ export class Schema {
           }
         }
       }
-    }
-
-    return false;
-  }
-
-  /**
-   * Check if a sequence item can repeat (for the specific element)
-   * @param item The sequence item
-   * @param elementName The element name
-   * @returns True if the element can repeat
-   */
-  private itemCanRepeat(item: Element, elementName: string): boolean {
-    const ns = 'xs:';
-
-    if (item.nodeName === ns + 'element' && item.getAttribute('name') === elementName) {
-      const maxOccurs = item.getAttribute('maxOccurs') || '1';
-      return maxOccurs === 'unbounded' || parseInt(maxOccurs) > 1;
-    } else if (item.nodeName === ns + 'choice') {
-      // For choice, check if the choice itself can repeat
-      const maxOccurs = item.getAttribute('maxOccurs') || '1';
-      return maxOccurs === 'unbounded' || parseInt(maxOccurs) > 1;
-    } else if (item.nodeName === ns + 'group') {
-      // Repetition on the group reference itself
-      const maxOccurs = item.getAttribute('maxOccurs') || '1';
-      return maxOccurs === 'unbounded' || parseInt(maxOccurs) > 1;
     }
 
     return false;
