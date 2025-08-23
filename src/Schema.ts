@@ -113,11 +113,11 @@ export class Schema {
       elementSearchResults: new Map(),
       attributeCache: new Map(),
       hierarchyValidation: new Map(),
-  elementDefinitionCache: new Map(),
-  childElementsByDef: new WeakMap<Element, Element[]>(),
-  contentModelCache: new WeakMap<Element, Element | null>(),
-  annotationCache: new WeakMap<Element, string>(),
-  possibleChildrenResultCache: new Map<string, Map<string, string>>()
+      elementDefinitionCache: new Map(),
+      childElementsByDef: new WeakMap<Element, Element[]>(),
+      contentModelCache: new WeakMap<Element, Element | null>(),
+      annotationCache: new WeakMap<Element, string>(),
+      possibleChildrenResultCache: new Map<string, Map<string, string>>()
     };
   }
 
@@ -155,7 +155,8 @@ export class Schema {
       toKeep.forEach(([key, value]) => this.cache.elementSearchResults.set(key, value));
     }
 
-    if (this.cache.attributeCache.size > this.maxCacheSize) {      const entries = Array.from(this.cache.attributeCache.entries());
+    if (this.cache.attributeCache.size > this.maxCacheSize) {
+      const entries = Array.from(this.cache.attributeCache.entries());
       const toKeep = entries.slice(-Math.floor(this.maxCacheSize / 2));
       this.cache.attributeCache.clear();
       toKeep.forEach(([key, value]) => this.cache.attributeCache.set(key, value));
@@ -181,42 +182,42 @@ export class Schema {
     // Pre-split file into lines for faster per-line operations
     const lines = xml.split(/\r\n|\r|\n/);
     const linesCount = lines.length;
-      // Annotate all elements in this document with their source file path so callers can resolve origin
-      try {
-        const annotate = (node: Node) => {
-          if (!node) return;
-          if (node.nodeType === 1) {
-            const el = node as Element;
-            // Store as a non-XSD attribute to avoid interfering with schema semantics
-            if (!el.getAttribute('data-source-file')) {
-              el.setAttribute('data-source-file', filePath);
-            }
-            const anyEl = el as any;
-            const line: number | undefined = anyEl.lineNumber ?? anyEl.line;
-            const column: number | undefined = anyEl.columnNumber ?? anyEl.column;
-            if (typeof line === 'number' && typeof column === 'number' && line >= 1 && line <= linesCount && column >= 1 && !el.getAttribute('start-tag-length')) {
-              const lineStr = lines[line - 1];
-              if (column <= lineStr.length && lineStr[column - 1] === '<') {
-                const closingTagIdx = lineStr.indexOf('>', column - 1);
-                const length = closingTagIdx >= 0 ? closingTagIdx - (column - 1) + 1 : lineStr.length - (column - 1);
-                if (typeof closingTagIdx === 'number') {
-                  el.setAttribute('start-tag-length', String(length));
-                }
+    // Annotate all elements in this document with their source file path so callers can resolve origin
+    try {
+      const annotate = (node: Node) => {
+        if (!node) return;
+        if (node.nodeType === 1) {
+          const el = node as Element;
+          // Store as a non-XSD attribute to avoid interfering with schema semantics
+          if (!el.getAttribute('data-source-file')) {
+            el.setAttribute('data-source-file', filePath);
+          }
+          const anyEl = el as any;
+          const line: number | undefined = anyEl.lineNumber ?? anyEl.line;
+          const column: number | undefined = anyEl.columnNumber ?? anyEl.column;
+          if (typeof line === 'number' && typeof column === 'number' && line >= 1 && line <= linesCount && column >= 1 && !el.getAttribute('start-tag-length')) {
+            const lineStr = lines[line - 1];
+            if (column <= lineStr.length && lineStr[column - 1] === '<') {
+              const closingTagIdx = lineStr.indexOf('>', column - 1);
+              const length = closingTagIdx >= 0 ? closingTagIdx - (column - 1) + 1 : lineStr.length - (column - 1);
+              if (typeof closingTagIdx === 'number') {
+                el.setAttribute('start-tag-length', String(length));
               }
             }
           }
-          // Recurse children
-          // eslint-disable-next-line @typescript-eslint/prefer-for-of
-          for (let i = 0; i < (node.childNodes ? node.childNodes.length : 0); i++) {
-            annotate(node.childNodes[i]);
-          }
-        };
-        if (doc && doc.documentElement) annotate(doc.documentElement);
-      } catch {
-        // Best-effort; if annotation fails, we still return the parsed document
-      }
-      return doc;
+        }
+        // Recurse children
+        // eslint-disable-next-line @typescript-eslint/prefer-for-of
+        for (let i = 0; i < (node.childNodes ? node.childNodes.length : 0); i++) {
+          annotate(node.childNodes[i]);
+        }
+      };
+      if (doc && doc.documentElement) annotate(doc.documentElement);
+    } catch {
+      // Best-effort; if annotation fails, we still return the parsed document
     }
+    return doc;
+  }
 
   /**
    * Merge included XSD documents into the main schema document
@@ -732,40 +733,28 @@ export class Schema {
       if (cached) this.enrichElementAnnotationFromTypeIfMissing(cached);
       return cached;
     }
+    const elementsFromMap = this.elementMap[elementName];
+    if (elementsFromMap && elementsFromMap.length === 1) {
+      const elementFromMap = elementsFromMap[0].node;
+      this.cache.elementDefinitionCache.set(fullCacheKey, elementFromMap);
+      this.ensureCacheSize();
+      this.enrichElementAnnotationFromTypeIfMissing(elementFromMap);
+      return elementFromMap;
+    }
 
     // Check for partial matches in cache - look for any cached key that starts with our element name
     // and has a hierarchy that our current hierarchy extends
     if (hierarchy.length > 0) {
-      for (const [cachedKey, cachedElement] of this.cache.elementDefinitionCache) {
-        if (cachedKey.startsWith(`${elementName}::`)) {
-          // Extract the cached hierarchy
-          const cachedHierarchyStr = cachedKey.substring(`${elementName}::`.length);
-          if (cachedHierarchyStr === '') continue; // Skip global element cache entries
-
-          const cachedHierarchy = cachedHierarchyStr.split('|');
-
-          // Check if the current hierarchy starts with the cached hierarchy
-          // If cached: [parent, grandparent] and current: [parent, grandparent, great-grandparent]
-          // then we can use the cached result since it's a more specific match
-          if (cachedHierarchy.length <= hierarchy.length) {
-            let isMatch = true;
-            for (let i = 0; i < cachedHierarchy.length; i++) {
-              if (cachedHierarchy[i] !== hierarchy[i]) {
-                isMatch = false;
-                break;
-              }
-            }
-
-            if (isMatch && cachedElement) {
-              // Found a matching cached result for a shorter hierarchy
-
-              // Cache this result for the current full hierarchy too
-              this.cache.elementDefinitionCache.set(fullCacheKey, cachedElement);
-              this.ensureCacheSize();
-
-              return cachedElement;
-            }
-          }
+      let keyPrefix = '';
+      for (const segment of hierarchy) {
+        keyPrefix += `|${segment}`;
+        const fullKey = `${elementName}::${keyPrefix}`;
+        const cachedElement = this.cache.elementDefinitionCache.get(fullKey);
+        if (cachedElement) {
+          this.cache.elementDefinitionCache.set(fullCacheKey, cachedElement);
+          this.ensureCacheSize();
+          this.enrichElementAnnotationFromTypeIfMissing(cachedElement);
+          return cachedElement;
         }
       }
     }
@@ -931,7 +920,7 @@ export class Schema {
    * @param name The name to search for
    * @returns Array of element or type definitions matching the name
    */
-    private getGlobalElementOrTypeDefs(name: string): Element[] {
+  private getGlobalElementOrTypeDefs(name: string): Element[] {
     const defs: Element[] = [];
     const seenNodes = new Set<Element>();
 
@@ -1047,12 +1036,12 @@ export class Schema {
 
       // Handle structural elements - recurse into ALL children
       if (node.nodeName === ns + 'sequence' ||
-          node.nodeName === ns + 'choice' ||
-          node.nodeName === ns + 'all' ||
-          node.nodeName === ns + 'complexType' ||
-          node.nodeName === ns + 'complexContent' ||
-          node.nodeName === ns + 'simpleContent' ||
-          node.nodeName === ns + 'group') {
+        node.nodeName === ns + 'choice' ||
+        node.nodeName === ns + 'all' ||
+        node.nodeName === ns + 'complexType' ||
+        node.nodeName === ns + 'complexContent' ||
+        node.nodeName === ns + 'simpleContent' ||
+        node.nodeName === ns + 'group') {
 
         // For structural nodes, recursively search all children
         for (let i = 0; i < node.childNodes.length; i++) {
@@ -1144,12 +1133,12 @@ export class Schema {
 
       // Handle structural elements - recurse into ALL children
       if (node.nodeName === ns + 'sequence' ||
-          node.nodeName === ns + 'choice' ||
-          node.nodeName === ns + 'all' ||
-          node.nodeName === ns + 'complexType' ||
-          node.nodeName === ns + 'complexContent' ||
-          node.nodeName === ns + 'simpleContent' ||
-          node.nodeName === ns + 'group') {
+        node.nodeName === ns + 'choice' ||
+        node.nodeName === ns + 'all' ||
+        node.nodeName === ns + 'complexType' ||
+        node.nodeName === ns + 'complexContent' ||
+        node.nodeName === ns + 'simpleContent' ||
+        node.nodeName === ns + 'group') {
 
         // For structural nodes, recursively search all children
         for (let i = 0; i < node.childNodes.length; i++) {
@@ -1184,12 +1173,12 @@ export class Schema {
     //   // Take the first contextDepth elements (immediate context)
     //   const currentContext = hierarchy.slice(0, contextDepth);
 
-      // const contextAttrs = this.getElementAttributesWithHierarchy(elementName, currentContext);
-      const contextAttrs = this.getElementAttributesWithHierarchy(elementName, hierarchy);
-      if (contextAttrs.length > 0) {
-        // Found attributes at this depth - return them immediately
-        return contextAttrs;
-      }
+    // const contextAttrs = this.getElementAttributesWithHierarchy(elementName, currentContext);
+    const contextAttrs = this.getElementAttributesWithHierarchy(elementName, hierarchy);
+    if (contextAttrs.length > 0) {
+      // Found attributes at this depth - return them immediately
+      return contextAttrs;
+    }
     // }
 
     // No attributes found at any depth - do NOT fall back to global search
@@ -1300,7 +1289,7 @@ export class Schema {
         }
       }
     } else if (node.nodeName === ns + 'complexContent' ||
-               node.nodeName === ns + 'simpleContent') {
+      node.nodeName === ns + 'simpleContent') {
       // Content wrapper - process children
       for (let i = 0; i < node.childNodes.length; i++) {
         const child = node.childNodes[i];
@@ -1309,9 +1298,9 @@ export class Schema {
         }
       }
     } else if (node.nodeName === ns + 'complexType' ||
-               node.nodeName === ns + 'sequence' ||
-               node.nodeName === ns + 'choice' ||
-               node.nodeName === ns + 'all') {
+      node.nodeName === ns + 'sequence' ||
+      node.nodeName === ns + 'choice' ||
+      node.nodeName === ns + 'all') {
       // Structural nodes - traverse children but skip nested element definitions
       for (let i = 0; i < node.childNodes.length; i++) {
         const child = node.childNodes[i];
@@ -1719,7 +1708,7 @@ export class Schema {
 
     // 3. If we have enums but no patterns, and enum validation failed, return error
     if (attrInfo.enumValues && attrInfo.enumValues.length > 0 &&
-        (!attrInfo.patterns || attrInfo.patterns.length === 0)) {
+      (!attrInfo.patterns || attrInfo.patterns.length === 0)) {
       const displayValue = value === normalizedValue ? value : `${value} (normalized: ${normalizedValue})`;
       return {
         isValid: false,
@@ -2446,8 +2435,8 @@ export class Schema {
    * @returns Filtered array of elements that are valid as next elements
    */
   private filterElementsBySequenceConstraints(elementDef: Element, allChildren: Element[], previousSibling: string): Element[] {
-  // Find the content model (sequence/choice) within the element definition (cached)
-  const contentModel = this.getCachedContentModel(elementDef);
+    // Find the content model (sequence/choice) within the element definition (cached)
+    const contentModel = this.getCachedContentModel(elementDef);
 
     if (!contentModel) {
       // If no content model found, return all children (fallback)
@@ -2486,10 +2475,10 @@ export class Schema {
 
     // If this is a complexType or content extension/restriction, find direct content model
     if (elementDef.nodeName === ns + 'complexType' ||
-        elementDef.nodeName === ns + 'complexContent' ||
-        elementDef.nodeName === ns + 'simpleContent' ||
-        elementDef.nodeName === ns + 'extension' ||
-        elementDef.nodeName === ns + 'restriction') {
+      elementDef.nodeName === ns + 'complexContent' ||
+      elementDef.nodeName === ns + 'simpleContent' ||
+      elementDef.nodeName === ns + 'extension' ||
+      elementDef.nodeName === ns + 'restriction') {
       const direct = this.findDirectContentModel(elementDef);
       if (direct) return direct;
     }
@@ -2573,8 +2562,8 @@ export class Schema {
 
         // Direct sequence/choice/all
         if (element.nodeName === ns + 'sequence' ||
-            element.nodeName === ns + 'choice' ||
-            element.nodeName === ns + 'all') {
+          element.nodeName === ns + 'choice' ||
+          element.nodeName === ns + 'all') {
           return element;
         }
 
@@ -2768,10 +2757,10 @@ export class Schema {
 
     const validNext: Element[] = [];
 
-  // If the previous item is a choice, we should only allow continuation inside the alternative that contains previousSibling.
-  // Track non-start elements from sequence alternatives to avoid leaking them when not inside that sequence arm.
-  let prevChoiceNonStart: Set<string> | null = null;
-  let nestedChoiceAllowedNames: Set<string> | null = null;
+    // If the previous item is a choice, we should only allow continuation inside the alternative that contains previousSibling.
+    // Track non-start elements from sequence alternatives to avoid leaking them when not inside that sequence arm.
+    let prevChoiceNonStart: Set<string> | null = null;
+    let nestedChoiceAllowedNames: Set<string> | null = null;
     if (previousItem && previousItem.nodeName === 'xs:choice') {
       // Prefer direct alternative scan first
       const ns = 'xs:';
@@ -2915,7 +2904,7 @@ export class Schema {
             }
             if (nestedSeq) {
               // Compute allowed names within the nested sequence arm non-recursively
-        const items: { name: string; minOccurs: number; maxOccurs: number | 'unbounded' }[] = [];
+              const items: { name: string; minOccurs: number; maxOccurs: number | 'unbounded' }[] = [];
               for (let i = 0; i < nestedSeq.childNodes.length; i++) {
                 const child = nestedSeq.childNodes[i];
                 if (child.nodeType !== 1) continue;
@@ -2923,9 +2912,9 @@ export class Schema {
                 if (el.nodeName === ns + 'element') {
                   const name = el.getAttribute('name');
                   if (!name) continue;
-          const minOccurs = this.getEffectiveMinOccurs(el, nestedSeq);
-          const maxOccurs = this.getEffectiveMaxOccurs(el, nestedSeq);
-          items.push({ name, minOccurs, maxOccurs });
+                  const minOccurs = this.getEffectiveMinOccurs(el, nestedSeq);
+                  const maxOccurs = this.getEffectiveMaxOccurs(el, nestedSeq);
+                  items.push({ name, minOccurs, maxOccurs });
                 }
               }
               const allowedNames = new Set<string>();
@@ -2961,7 +2950,7 @@ export class Schema {
       }
     }
 
-  // Note: do not override sibling computation by diving into the previous element's inner model here.
+    // Note: do not override sibling computation by diving into the previous element's inner model here.
 
     // Check if the previous item can repeat; use effective maxOccurs (including inheritance from the parent sequence)
     if (previousItem) {
@@ -3005,21 +2994,21 @@ export class Schema {
       validNext.push(...this.getStartElementsOfSequence(sequence, allChildren));
     }
 
-  // Add elements that come after the previous position in the sequence (only when not staying within a nested choice arm)
+    // Add elements that come after the previous position in the sequence (only when not staying within a nested choice arm)
     for (let i = previousPosition + 1; i < sequenceItems.length; i++) {
       const nextItem = sequenceItems[i];
-  const itemElements = this.getElementsFromSequenceItem(nextItem, allChildren);
+      const itemElements = this.getElementsFromSequenceItem(nextItem, allChildren);
       validNext.push(...itemElements);
 
       // If this item is required (minOccurs >= 1), stop here
       // If it's optional (minOccurs = 0), continue to the next items
-  const minOccurs = this.getEffectiveMinOccurs(nextItem, sequence);
+      const minOccurs = this.getEffectiveMinOccurs(nextItem, sequence);
       if (minOccurs >= 1) {
         break; // Required item found, stop here
       }
     }
 
-  // If all following items are optional (no required items encountered), then
+    // If all following items are optional (no required items encountered), then
     // after prioritizing these optional next items, allow any other elements
     // from the upper-level choice (i.e., allChildren minus those already suggested).
     let hasRequiredAfter = false;
@@ -3031,7 +3020,7 @@ export class Schema {
       }
     }
 
-  // Do not fall back to other alternatives of the same choice here; that would allow do_elseif/do_else after unrelated items like do_all
+    // Do not fall back to other alternatives of the same choice here; that would allow do_elseif/do_else after unrelated items like do_all
 
     // When previous item is a choice, avoid leaking non-start elements of its sequence alternatives
     if (previousItem && previousItem.nodeName === 'xs:choice' && prevChoiceNonStart && prevChoiceNonStart.size > 0) {
@@ -3206,7 +3195,7 @@ export class Schema {
       const prioritized: Element[] = [];
       let innerHasRequiredFirst = false;
 
-  if (innerModel.nodeName === ns + 'sequence') {
+      if (innerModel.nodeName === ns + 'sequence') {
         // Collect starting elements of the inner sequence, respecting minOccurs
         for (let i = 0; i < innerModel.childNodes.length; i++) {
           const child = innerModel.childNodes[i];
@@ -3214,8 +3203,8 @@ export class Schema {
             const item = child as Element;
             const elems = this.getElementsFromSequenceItem(item, allChildren);
             prioritized.push(...elems);
-    const minOccurs = this.getEffectiveMinOccurs(item, innerModel);
-    if (minOccurs >= 1) {
+            const minOccurs = this.getEffectiveMinOccurs(item, innerModel);
+            if (minOccurs >= 1) {
               innerHasRequiredFirst = true;
               break; // Stop at first required inner item
             }
@@ -3250,8 +3239,8 @@ export class Schema {
       if (dedupPrioritized.length === 0) return [];
 
       // If inner start is all optional, append other elements from parent level
-  // If inner start is all optional, do NOT include unrelated alternatives from parent choice here.
-  // Only return the inner start-capable elements; the outer sequence logic will handle following items.
+      // If inner start is all optional, do NOT include unrelated alternatives from parent choice here.
+      // Only return the inner start-capable elements; the outer sequence logic will handle following items.
 
       return dedupPrioritized;
     }
@@ -3313,7 +3302,7 @@ export class Schema {
     const stack: Element[] = [root];
     const visited = new Set<Element>();
     let steps = 0;
-  const MAX_STEPS = 20000; // hard safety cap to avoid runaway traversals
+    const MAX_STEPS = 20000; // hard safety cap to avoid runaway traversals
     while (stack.length) {
       if (++steps > MAX_STEPS) break;
       const node = stack.pop()!;
@@ -3541,10 +3530,10 @@ export class Schema {
       if (child.nodeType !== 1) continue;
       const item = child as Element;
       // Include start elements of this item
-  const startElems = this.getStartElementsFromItem(item, allChildren);
+      const startElems = this.getStartElementsFromItem(item, allChildren);
       results.push(...startElems);
       // Stop if this item is required; otherwise, continue to next optional item
-  const minOccurs = this.getEffectiveMinOccurs(item, seq);
+      const minOccurs = this.getEffectiveMinOccurs(item, seq);
       if (minOccurs >= 1) break;
     }
     // De-duplicate preserving order
