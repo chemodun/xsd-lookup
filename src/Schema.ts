@@ -32,7 +32,7 @@ interface HierarchyCache {
   childElementsByDef?: WeakMap<Element, Element[]>; // cache of findAllElementsInDefinition
   contentModelCache?: WeakMap<Element, Element | null>; // cache of findContentModel
   annotationCache?: WeakMap<Element, string>; // cache of extractAnnotationText/type fallback
-  possibleChildrenResultCache?: Map<string, Map<string, string>>; // cache final results per key
+  possibleChildrenResultCache?: Record<string, Map<string, string>>; // cache final results per key (Record for low overhead)
 }
 
 export interface ElementLocation {
@@ -117,7 +117,7 @@ export class Schema {
       childElementsByDef: new WeakMap<Element, Element[]>(),
       contentModelCache: new WeakMap<Element, Element | null>(),
       annotationCache: new WeakMap<Element, string>(),
-      possibleChildrenResultCache: new Map<string, Map<string, string>>()
+      possibleChildrenResultCache: {}
     };
   }
 
@@ -167,6 +167,17 @@ export class Schema {
       const toKeep = entries.slice(-Math.floor(this.maxCacheSize / 2));
       this.cache.elementDefinitionCache.clear();
       toKeep.forEach(([key, value]) => this.cache.elementDefinitionCache.set(key, value));
+    }
+
+    // Manage possibleChildrenResultCache size approximately. Since it's a Record, approximate size via keys length.
+    if (this.cache.possibleChildrenResultCache) {
+      const keys = Object.keys(this.cache.possibleChildrenResultCache);
+      if (keys.length > this.maxCacheSize) {
+        const toKeep = keys.slice(-Math.floor(this.maxCacheSize / 2));
+        const newRec: Record<string, Map<string, string>> = {};
+        for (const k of toKeep) newRec[k] = this.cache.possibleChildrenResultCache[k];
+        this.cache.possibleChildrenResultCache = newRec;
+      }
     }
   }
 
@@ -2294,7 +2305,7 @@ export class Schema {
 
     // Fast-path cache for final result
     const resCache = this.cache.possibleChildrenResultCache;
-    const cachedMap = resCache?.get(cacheKey);
+    const cachedMap = resCache ? resCache[cacheKey] : undefined;
     if (cachedMap) {
       return new Map(cachedMap);
     }
@@ -2306,7 +2317,9 @@ export class Schema {
 
     if (!elementDef) {
       // Cache empty result (new cache)
-      resCache?.set(cacheKey, new Map());
+      if (resCache) {
+        resCache[cacheKey] = new Map();
+      }
       return new Map<string, string>();
     }
 
@@ -2357,7 +2370,9 @@ export class Schema {
     tAnnot += (globalThis.performance?.now?.() ?? Date.now()) - tAnnot0;
 
     // Cache the final result map for fast retrieval
-    resCache?.set(cacheKey, new Map(result));
+    if (resCache) {
+      resCache[cacheKey] = new Map(result);
+    }
 
     // Optional profiling output
     if ((process.env.XSDL_PROFILE_CHILDREN || '').trim() === '1') {
