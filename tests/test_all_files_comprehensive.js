@@ -396,7 +396,8 @@ function testDirectory(dirInfo) {
     .filter(file => file.endsWith('.xml'))
     .sort();
 
-  console.log(`Found ${files.length} XML files\n`);  for (const fileName of files) {
+  console.log(`Found ${files.length} XML files\n`);
+  for (const fileName of files) {
     const filePath = path.join(dirInfo.path, fileName);
     console.log(`📄 Testing: ${fileName}`);
 
@@ -581,6 +582,7 @@ function testDirectory(dirInfo) {
         }
       }
 
+      const fileProcessTimeSec = (new Date() - testCaseStartTime) / 1000;
       // Add detailed validation summary to output
       const elementsStatus = fileElementsValid === xmlElements.length ? '✅' : '❌';
       const attributesStatus = fileAttributesValid === fileAttributesTotal ? '✅' : '❌';
@@ -589,6 +591,7 @@ function testDirectory(dirInfo) {
       console.log(`   ${elementsStatus} Elements valid: ${fileElementsValid}/${xmlElements.length}`);
       console.log(`   ${attributesStatus} Attributes valid: ${fileAttributesValid}/${fileAttributesTotal}`);
       console.log(`   ${attributeValuesStatus} Attribute values valid: ${fileAttributeValuesValid}/${fileAttributeValuesTotal}`);
+      console.log(`   ⏱ Time: ${fileProcessTimeSec.toFixed(3)}s`);
 
       validationOutput.push(`${elementsStatus} Elements validation: ${fileElementsValid}/${xmlElements.length}`);
       validationOutput.push(`${attributesStatus} Attributes validation: ${fileAttributesValid}/${fileAttributesTotal}`);
@@ -649,6 +652,7 @@ function testDirectory(dirInfo) {
       validationOutput.push(`⚙️ Attributes: ${fileAttributesTotal} (${fileAttributesValid} valid)`);
       validationOutput.push(`🔍 Attribute Values: ${fileAttributeValuesTotal} (${fileAttributeValuesValid} valid)`);
       validationOutput.push(`❌ Validation Errors: ${fileValidationErrors.length}`);
+      validationOutput.push(`⏱ Time: ${fileProcessTimeSec.toFixed(3)}s`);
 
       if (fileValidationErrors.length > 0) {
         validationOutput.push('\n❌ Errors Found:');
@@ -669,8 +673,8 @@ function testDirectory(dirInfo) {
         };
         testSuite.failures++;
       } else if (fileElementsValid === xmlElements.length &&
-          fileAttributesValid === fileAttributesTotal &&
-          fileAttributeValuesValid === fileAttributeValuesTotal) {
+        fileAttributesValid === fileAttributesTotal &&
+        fileAttributeValuesValid === fileAttributeValuesTotal) {
         validFiles++;
       }
 
