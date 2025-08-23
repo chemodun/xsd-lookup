@@ -1106,13 +1106,8 @@ export class Schema {
     // Search for IMMEDIATE child elements (limited depth for performance)
     const visited = new Set<Element>();
 
-    const searchInNode = (node: Element, depth: number = 0): void => {
+    const searchInNode = (node: Element): void => {
       if (!node || node.nodeType !== 1) return;
-
-      // Depth limit for performance - prevent excessive recursion
-      if (depth > 20) {
-        return;
-      }
 
       // Use the actual DOM node reference for cycle detection
       if (visited.has(node)) return;
@@ -1129,7 +1124,7 @@ export class Schema {
         const baseName = node.getAttribute('base')!;
         const baseType = this.schemaIndex.types[baseName];
         if (baseType) {
-          searchInNode(baseType, depth + 1);
+          searchInNode(baseType);
         }
       }
 
@@ -1138,7 +1133,7 @@ export class Schema {
         const refName = node.getAttribute('ref')!;
         const groupDef = this.schemaIndex.groups[refName];
         if (groupDef) {
-          searchInNode(groupDef, depth + 1);
+          searchInNode(groupDef);
         }
       }
 
@@ -1155,13 +1150,13 @@ export class Schema {
         for (let i = 0; i < node.childNodes.length; i++) {
           const child = node.childNodes[i];
           if (child.nodeType === 1) {
-            searchInNode(child as Element, depth + 1);
+            searchInNode(child as Element);
           }
         }
       }
     };
 
-    searchInNode(typeNode, 0);
+    searchInNode(typeNode);
 
     return results;
   }
