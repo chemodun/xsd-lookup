@@ -1,3 +1,10 @@
+// Parse CLI flags early
+const argv = process.argv.slice(2);
+const enableProfileCaches = argv.includes('--profile-caches');
+if (enableProfileCaches) {
+  process.env.XSDL_PROFILE_CACHES = '1';
+}
+
 const { xsdReference, XsdReference } = require('../dist/XsdReference');
 const { XsdDetector } = require('../dist/XsdDetector');
 const fs = require('fs');
@@ -5,6 +12,9 @@ const path = require('path');
 const { DOMParser } = require('@xmldom/xmldom');
 
 console.log('=== Comprehensive All-Files XSD Validation Test ===\n');
+if (enableProfileCaches) {
+  console.log('Cache profiling enabled (XSDL_PROFILE_CACHES=1)');
+}
 
 // Initialize the new TypeScript system (XSD directory is now in tests/data/xsd)
 xsdReference.init(path.join(__dirname, 'data', 'xsd'));
