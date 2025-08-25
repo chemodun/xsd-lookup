@@ -2213,16 +2213,6 @@ export class Schema {
     // Cache the final result map for fast retrieval
     cachedMap.set(previousSibling, result);
     // Optional profiling output
-    if ((process.env.XSDL_PROFILE_CHILDREN || '').trim() === '1') {
-      const t1 = (globalThis.performance?.now?.() ?? Date.now());
-      const total = (t1 - t0).toFixed(3);
-      const out = [
-        `getPossibleChildElements(${elementName}) -> ${result.size} children in ${total}ms`,
-        `  def: ${tDef.toFixed(3)}ms, findAll: ${tFindAll.toFixed(3)}ms, filter: ${tFilter.toFixed(3)}ms, annotations: ${tAnnot.toFixed(3)}ms`
-      ];
-      // eslint-disable-next-line no-console
-      console.log(out.join('\n'));
-    }
 
     return result;
   }
