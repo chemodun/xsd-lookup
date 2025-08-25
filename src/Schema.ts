@@ -33,6 +33,11 @@ interface HierarchyCache {
   contentModelCache?: WeakMap<Element, Element | null>; // cache of findContentModel
   annotationCache?: WeakMap<Element, string>; // cache of extractAnnotationText/type fallback
   possibleChildrenResultCache?: Record<string, Map<string, string>>; // cache final results per key (Record for low overhead)
+  // New caches for performance
+  validChildCache?: WeakMap<Element, Map<string, Map<string, boolean>>>; // parentDef -> prevKey -> childName -> boolean
+  modelNextNamesCache?: WeakMap<Element, Map<string, Set<string>>>; // contentModel -> prevKey -> allowed names
+  modelStartNamesCache?: WeakMap<Element, Set<string>>; // contentModel -> start names
+  containsCache?: WeakMap<Element, Map<string, boolean>>; // item Element -> elementName -> contains?
 }
 
 export interface ElementLocation {
@@ -117,7 +122,11 @@ export class Schema {
       childElementsByDef: new WeakMap<Element, Element[]>(),
       contentModelCache: new WeakMap<Element, Element | null>(),
       annotationCache: new WeakMap<Element, string>(),
-      possibleChildrenResultCache: {}
+      possibleChildrenResultCache: {},
+      validChildCache: new WeakMap<Element, Map<string, Map<string, boolean>>>(),
+      modelNextNamesCache: new WeakMap<Element, Map<string, Set<string>>>(),
+      modelStartNamesCache: new WeakMap<Element, Set<string>>(),
+      containsCache: new WeakMap<Element, Map<string, boolean>>()
     };
   }
 
@@ -2398,43 +2407,93 @@ export class Schema {
     parentHierarchy: string[] = [],
     previousSibling?: string
   ): boolean {
+    // Memoized cache by resolved parent Element and previousSibling
     // Resolve the parent element definition within the provided hierarchy
     const parentDef = this.getElementDefinition(parentName, parentHierarchy);
     if (!parentDef) return false;
 
+    // Fast path: cache per parentDef -> prevKey -> childName
+    const prevKey = previousSibling || '__START__';
+    let byPrev = this.cache.validChildCache!.get(parentDef);
+    if (!byPrev) { byPrev = new Map(); this.cache.validChildCache!.set(parentDef, byPrev); }
+    let byChild = byPrev.get(prevKey);
+    if (!byChild) { byChild = new Map(); byPrev.set(prevKey, byChild); }
+    if (byChild.has(elementName)) return byChild.get(elementName)!;
+
     // Discover all immediate child element candidates (cached)
     const allChildren = this.getChildElementsCached(parentDef);
-    if (allChildren.length === 0) return false;
+    if (allChildren.length === 0) { byChild.set(elementName, false); return false; }
 
     // Find the concrete Element node for the requested child; if not declared, it's invalid
     const candidate = allChildren.find(el => el.getAttribute('name') === elementName);
-    if (!candidate) return false;
+    if (!candidate) { byChild.set(elementName, false); return false; }
 
     // If there is no ordering constraint or xs:all, declaration is sufficient
     const contentModel = this.getCachedContentModel(parentDef);
     if (!previousSibling) {
-      if (!contentModel) return true; // fallback: treat as any declared child allowed at start
+      if (!contentModel) { byChild.set(elementName, true); return true; }
       const modelType = contentModel.nodeName;
-      if (modelType === 'xs:all') return true; // ordering-free
+      if (modelType === 'xs:all') { byChild.set(elementName, true); return true; }
       if (modelType === 'xs:choice') {
         // Check if the candidate can start any alternative in the choice
-        return this.getElementsInChoice(contentModel, [candidate]).length > 0;
+        const startSet = this.getModelStartSet(contentModel, allChildren);
+        const ok = startSet.has(elementName);
+        byChild.set(elementName, ok);
+        return ok;
       }
       if (modelType === 'xs:sequence') {
         // Check if the candidate can start the sequence (respecting minOccurs chain)
-        return this.getStartElementsOfSequence(contentModel, [candidate]).length > 0;
+        const startSet = this.getModelStartSet(contentModel, allChildren);
+        const ok = startSet.has(elementName);
+        byChild.set(elementName, ok);
+        return ok;
       }
       // Unknown model type: be permissive like getPossibleChildElements fallback
+      byChild.set(elementName, true);
       return true;
     }
 
     // There is a previous sibling; handle ordering constraints efficiently by filtering only the candidate
-    if (!contentModel) return true; // no model => allow any declared child after previous
-    if (contentModel.nodeName === 'xs:all') return true; // xs:all has no ordering between children
+    if (!contentModel) { byChild.set(elementName, true); return true; }
+    if (contentModel.nodeName === 'xs:all') { byChild.set(elementName, true); return true; }
 
-    // Run the full constraint engine but only against the single candidate element
-    const allowed = this.filterElementsBySequenceConstraints(parentDef, [candidate], previousSibling);
-    return allowed.length > 0;
+    // Use cached next-name set for this content model and previous sibling
+    const nextSet = this.getModelNextSet(contentModel, previousSibling, allChildren);
+    const ok = nextSet.has(elementName);
+    byChild.set(elementName, ok);
+    return ok;
+  }
+
+  // Compute and cache start-name set for a content model
+  private getModelStartSet(model: Element, allChildren: Element[]): Set<string> {
+    let cached = this.cache.modelStartNamesCache!.get(model);
+    if (cached) return cached;
+    const ns = 'xs:';
+    let starters: Element[] = [];
+    if (model.nodeName === ns + 'choice' || model.nodeName === ns + 'all') {
+      starters = this.getElementsInChoice(model, allChildren);
+    } else if (model.nodeName === ns + 'sequence') {
+      starters = this.getStartElementsOfSequence(model, allChildren);
+    } else {
+      // Fallback: allow any declared children to start
+      starters = allChildren;
+    }
+    const set = new Set(starters.map(e => e.getAttribute('name')!).filter(Boolean) as string[]);
+    this.cache.modelStartNamesCache!.set(model, set);
+    return set;
+  }
+
+  // Compute and cache next-name set for a content model given previous sibling
+  private getModelNextSet(model: Element, previousSibling: string, allChildren: Element[]): Set<string> {
+    let byPrev = this.cache.modelNextNamesCache!.get(model);
+    if (!byPrev) { byPrev = new Map(); this.cache.modelNextNamesCache!.set(model, byPrev); }
+    const prevKey = previousSibling || '__START__';
+    const existing = byPrev.get(prevKey);
+    if (existing) return existing;
+    const nextElems = this.getValidNextElementsInContentModel(model, previousSibling, allChildren);
+    const set = new Set(nextElems.map(e => e.getAttribute('name')!).filter(Boolean) as string[]);
+    byPrev.set(prevKey, set);
+    return set;
   }
 
   /**
@@ -2512,7 +2571,7 @@ export class Schema {
     if (typeAttr && !this.isBuiltInXsdType(typeAttr)) {
       const typeDef = this.schemaIndex.types[typeAttr] || this.schemaIndex.types[typeAttr.replace(/^.*:/, '')];
       if (typeDef) {
-        return this.findContentModel(typeDef);
+        return this.getCachedContentModel(typeDef);
       }
     }
 
