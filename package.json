@@ -9,8 +9,12 @@
     "rebuild": "npm run clean && npm run build",
     "test": "node tests/test_all_files_comprehensive.js",
     "test:cache": "node tests/test_all_files_comprehensive.js --profile-caches",
+    "test:methods": "node tests/test_all_files_comprehensive.js --profile-methods",
+    "test:profile-all": "node tests/test_all_files_comprehensive.js --profile-caches --profile-methods",
     "test:build": "npm run build && npm test",
     "test:build:cache": "npm run build && npm run test:cache",
+    "test:build:methods": "npm run build && npm run test:methods",
+    "test:build:profile-all": "npm run build && npm run test:profile-all",
     "test:full": "npm run test:build",
     "prepublishOnly": "npm run rebuild && npm test"
   },

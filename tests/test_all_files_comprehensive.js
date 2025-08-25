@@ -4,9 +4,9 @@ const enableProfileCaches = argv.includes('--profile-caches');
 if (enableProfileCaches) {
   process.env.XSDL_PROFILE_CACHES = '1';
 }
-const enableProfileTimings = argv.includes('--profile-timings');
+const enableProfileTimings = argv.includes('--profile-methods');
 if (enableProfileTimings) {
-  process.env.XSDL_PROFILE_TIMINGS = '1';
+  process.env.XSDL_PROFILE_METHODS = '1';
 }
 
 const { xsdReference, XsdReference } = require('../dist/XsdReference');

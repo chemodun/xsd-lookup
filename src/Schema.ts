@@ -111,13 +111,16 @@ export class Schema {
   private cache!: HierarchyCache;
   private cacheStats!: CacheStats;
   private methodTimings: Record<string, number> = {};
+  private methodCalls: Record<string, number> = {};
   private maxCacheSize: number = 100000;
   private shouldProfileCaches: boolean = false;
+  private shouldProfileMethods: boolean = false;
   constructor(xsdFilePath: string, includeFiles: string[] = []) {
     // Initialize caches and metrics first
     this.initializeCaches();
     this.initializeCacheStats();
     this.shouldProfileCaches = ((process.env.XSDL_PROFILE_CACHES || '').trim() === '1');
+    this.shouldProfileMethods = ((process.env.XSDL_PROFILE_METHODS || '').trim() === '1');
     this.name = path.basename(xsdFilePath);
     this.doc = this.loadXml(xsdFilePath);
 
@@ -195,23 +198,28 @@ export class Schema {
   }
 
   // Method timing profiling
-  private shouldProfileTimings(): boolean {
-    return ((process.env.XSDL_PROFILE_TIMINGS || '').trim() === '1');
-  }
   private profStart(): number { return (globalThis.performance?.now?.() ?? Date.now()); }
   private profEnd(method: string, t0: number): void {
-    if (!this.shouldProfileTimings()) return;
+    if (!this.shouldProfileMethods) return;
     const t1 = (globalThis.performance?.now?.() ?? Date.now());
     const dt = t1 - t0;
     this.methodTimings[method] = (this.methodTimings[method] || 0) + dt;
+    this.methodCalls[method] = (this.methodCalls[method] || 0) + 1;
   }
   private printMethodStats(): void {
-    if (!this.shouldProfileTimings()) return;
-    const entries = Object.entries(this.methodTimings).sort((a, b) => b[1] - a[1]);
+    if (!this.shouldProfileMethods) return;
+    let entries = Object.entries(this.methodTimings).sort((a, b) => b[1] - a[1]);
     const lines: string[] = [];
     lines.push(`=== XSD-Lookup Method Timings for "${this.name}" (total ms) ===`);
     for (const [name, total] of entries) {
       lines.push(`${name}: ${total.toFixed(3)}ms`);
+    }
+    // Print call counts in the same order as timings, descending by total time
+    lines.push(`=== XSD-Lookup Method Call Counts for "${this.name}" ===`);
+    entries = Object.entries(this.methodCalls).sort((a, b) => b[1] - a[1]);
+    for (const [name] of entries) {
+      const calls = this.methodCalls[name] || 0;
+      lines.push(`${name}: ${calls}`);
     }
     // eslint-disable-next-line no-console
     console.log(lines.join('\n'));
@@ -810,7 +818,8 @@ export class Schema {
   }
 
   public getElementDefinition(elementName: string, hierarchy: string[] = []): Element | undefined {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       // Create cache key from element name and hierarchy
       const hierarchyKey = hierarchy.length > 0 ? hierarchy.join('|') : '';
@@ -903,7 +912,7 @@ export class Schema {
 
       return result;
     } finally {
-      this.profEnd('getElementDefinition', __t0);
+      if (__profiling) this.profEnd('getElementDefinition', __t0);
     }
   }
 
@@ -1248,7 +1257,8 @@ export class Schema {
    * Get enhanced attribute information including type and validation details
    */
   public getElementAttributes(elementName: string, hierarchy: string[] = []): AttributeInfo[] {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       // STRICT HIERARCHY RULE: If hierarchy provided, only search in hierarchy context
       // Never fall back to global elements when hierarchy is specified
@@ -1275,7 +1285,7 @@ export class Schema {
       // No attributes found at any depth - do NOT fall back to global search
       return [];
     } finally {
-      this.profEnd('getElementAttributes', __t0);
+      if (__profiling) this.profEnd('getElementAttributes', __t0);
     }
   }
 
@@ -1286,7 +1296,8 @@ export class Schema {
    * @returns Array of attribute information
    */
   private getElementAttributesWithHierarchy(elementName: string, hierarchy: string[]): AttributeInfo[] {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       // Create cache key
       const cacheKey = `attrs:${elementName}:${hierarchy.join('>')}`;
@@ -1322,7 +1333,7 @@ export class Schema {
 
       return result;
     } finally {
-      this.profEnd('getElementAttributesWithHierarchy', __t0);
+      if (__profiling) this.profEnd('getElementAttributesWithHierarchy', __t0);
     }
   }
 
@@ -1426,7 +1437,8 @@ export class Schema {
    * Get enhanced attribute information including type and validation details
    */
   public getElementAttributesWithTypes(elementName: string, hierarchy: string[] = []): EnhancedAttributeInfo[] {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       const attributes = this.getElementAttributes(elementName, hierarchy);
 
@@ -1465,7 +1477,7 @@ export class Schema {
         return enhancedAttr;
       });
     } finally {
-      this.profEnd('getElementAttributesWithTypes', __t0);
+      if (__profiling) this.profEnd('getElementAttributesWithTypes', __t0);
     }
   }
 
@@ -1473,7 +1485,8 @@ export class Schema {
    * Get comprehensive validation information for a type
    */
   private getTypeValidationInfo(typeName: string): Partial<EnhancedAttributeInfo> {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       const typeNode = this.schemaIndex.types[typeName];
       if (!typeNode) return {};
@@ -1579,7 +1592,7 @@ export class Schema {
 
       return validationInfo;
     } finally {
-      this.profEnd('getTypeValidationInfo', __t0);
+      if (__profiling) this.profEnd('getTypeValidationInfo', __t0);
     }
   }
 
@@ -1587,7 +1600,8 @@ export class Schema {
    * Get validation information from inline type definitions (xs:simpleType within attribute)
    */
   private getInlineTypeValidationInfo(attributeNode: Element): Partial<EnhancedAttributeInfo> {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       const validationInfo: Partial<EnhancedAttributeInfo> = {};
       // Look for inline xs:simpleType definition within the attribute node
@@ -1610,7 +1624,7 @@ export class Schema {
 
       return validationInfo;
     } finally {
-      this.profEnd('getInlineTypeValidationInfo', __t0);
+      if (__profiling) this.profEnd('getInlineTypeValidationInfo', __t0);
     }
   }
 
@@ -1618,7 +1632,8 @@ export class Schema {
    * Extract validation rules from a node (reusable logic)
    */
   private extractValidationRulesFromNode(node: Element, validationInfo: Partial<EnhancedAttributeInfo>): void {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       if (!node || node.nodeType !== 1) return;
 
@@ -1692,7 +1707,7 @@ export class Schema {
         }
       }
     } finally {
-      this.profEnd('extractValidationRulesFromNode', __t0);
+      if (__profiling) this.profEnd('extractValidationRulesFromNode', __t0);
     }
   }
 
@@ -1700,7 +1715,8 @@ export class Schema {
    * Validate an attribute value against its XSD definition
    */
   public validateAttributeValue(elementName: string, attributeName: string, attributeValue: string, hierarchy: string[] = []): AttributeValidationResult {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       const attributes = this.getElementAttributesWithTypes(elementName, hierarchy);
       const attrInfo = attributes.find(attr => attr.name === attributeName);
@@ -1720,7 +1736,7 @@ export class Schema {
       // Comprehensive validation using all available restrictions
       return this.validateValueWithRestrictions(attributeValue, attrInfo);
     } finally {
-      this.profEnd('validateAttributeValue', __t0);
+      if (__profiling) this.profEnd('validateAttributeValue', __t0);
     }
   }
 
@@ -1745,7 +1761,8 @@ export class Schema {
    * Validate a value against all possible XSD restrictions
    */
   private validateValueWithRestrictions(value: string, attrInfo: EnhancedAttributeInfo): AttributeValidationResult {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       // Normalize the value for validation (join multi-line content)
       const normalizedValue = this.normalizeAttributeValue(value);
@@ -1905,7 +1922,7 @@ export class Schema {
         restrictions: restrictions.length > 0 ? restrictions : undefined
       };
     } finally {
-      this.profEnd('validateValueWithRestrictions', __t0);
+      if (__profiling) this.profEnd('validateValueWithRestrictions', __t0);
     }
   }
 
@@ -1931,7 +1948,8 @@ export class Schema {
    * Validate basic XSD types based on actual XSD definitions, not hardcoded assumptions
    */
   private validateBasicType(value: string, typeName: string): AttributeValidationResult {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       // If no type specified, assume valid
       if (!typeName) {
@@ -1960,7 +1978,7 @@ export class Schema {
       // Validate against the resolved built-in type
       return this.validateBuiltinXsdType(value, baseType, typeName);
     } finally {
-      this.profEnd('validateBasicType', __t0);
+      if (__profiling) this.profEnd('validateBasicType', __t0);
     }
   }
 
@@ -2040,7 +2058,8 @@ export class Schema {
    * Helper method to find child elements by name
    */
   private findChildElements(parent: Element, elementName: string): Element[] {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       const results: Element[] = [];
 
@@ -2062,7 +2081,7 @@ export class Schema {
       searchInNode(parent);
       return results;
     } finally {
-      this.profEnd('findChildElements', __t0);
+      if (__profiling) this.profEnd('findChildElements', __t0);
     }
   }
 
@@ -2070,7 +2089,8 @@ export class Schema {
    * Validate against built-in XSD types only
    */
   private validateBuiltinXsdType(value: string, builtinType: string, originalType: string): AttributeValidationResult {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       switch (builtinType) {
         case 'xs:string':
@@ -2140,7 +2160,7 @@ export class Schema {
           return { isValid: true, expectedType: originalType };
       }
     } finally {
-      this.profEnd('validateBuiltinXsdType', __t0);
+      if (__profiling) this.profEnd('validateBuiltinXsdType', __t0);
     }
   }
 
@@ -2151,7 +2171,8 @@ export class Schema {
    * @returns Element definition if found, undefined otherwise
    */
   private findElementTopDown(elementName: string, topDownHierarchy: string[]): Element | undefined {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       if (topDownHierarchy.length === 0) {
         // No hierarchy - look for global elements
@@ -2195,7 +2216,7 @@ export class Schema {
       // Return the first found element (could add uniqueness logic here later)
       return targetElements.length > 0 ? targetElements[0] : undefined;
     } finally {
-      this.profEnd('findElementTopDown', __t0);
+      if (__profiling) this.profEnd('findElementTopDown', __t0);
     }
   }
 
@@ -2301,7 +2322,8 @@ export class Schema {
    * @returns Map where key is child element name and value is its annotation text
    */
   public getPossibleChildElements(elementName: string, hierarchy: string[] = [], previousSibling: string = ''): Map<string, string> {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       let tDef = 0, tFindAll = 0, tFilter = 0, tAnnot = 0;
 
@@ -2384,7 +2406,7 @@ export class Schema {
       }
       return result;
     } finally {
-      this.profEnd('getPossibleChildElements', __t0);
+      if (__profiling) this.profEnd('getPossibleChildElements', __t0);
     }
   }
 
@@ -2402,7 +2424,8 @@ export class Schema {
     parentHierarchy: string[] = [],
     previousSibling?: string
   ): boolean {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       // Memoized cache by resolved parent Element and previousSibling
       // Resolve the parent element definition within the provided hierarchy
@@ -2461,13 +2484,14 @@ export class Schema {
       byChild.set(elementName, ok); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++;
       return ok;
     } finally {
-      this.profEnd('isValidChild', __t0);
+      if (__profiling) this.profEnd('isValidChild', __t0);
     }
   }
 
   // Compute and cache start-name set for a content model
   private getModelStartSet(model: Element, allChildren: Element[]): Set<string> {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       let cached = this.cache.modelStartNamesCache!.get(model);
       if (cached) { if (this.shouldProfileCaches) this.cacheStats.modelStartNamesCache.hits++; return cached; }
@@ -2486,13 +2510,14 @@ export class Schema {
       if (this.shouldProfileCaches) this.cacheStats.modelStartNamesCache.sets++;
       return set;
     } finally {
-      this.profEnd('getModelStartSet', __t0);
+      if (__profiling) this.profEnd('getModelStartSet', __t0);
     }
   }
 
   // Compute and cache next-name set for a content model given previous sibling
   private getModelNextSet(model: Element, previousSibling: string, prevSibling: Element, allChildren: Element[]): Set<string> {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       let byPrev = this.cache.modelNextNamesCache!.get(model);
       if (!byPrev) { byPrev = new Map(); this.cache.modelNextNamesCache!.set(model, byPrev); }
@@ -2506,7 +2531,7 @@ export class Schema {
       if (this.shouldProfileCaches) this.cacheStats.modelNextNamesCache.sets++;
       return set;
     } finally {
-      this.profEnd('getModelNextSet', __t0);
+      if (__profiling) this.profEnd('getModelNextSet', __t0);
     }
   }
 
@@ -2518,7 +2543,8 @@ export class Schema {
    * @returns Filtered array of elements that are valid as next elements
    */
   private filterElementsBySequenceConstraints(elementDef: Element, allChildren: Element[], previousSibling: Element): Element[] {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       // Find the content model (sequence/choice) within the element definition (cached)
       const contentModel = this.getCachedContentModel(elementDef);
@@ -2531,7 +2557,7 @@ export class Schema {
       // Apply filtering based on content model type
       return this.getValidNextElementsInContentModel(contentModel, previousSibling, allChildren);
     } finally {
-      this.profEnd('filterElementsBySequenceConstraints', __t0);
+      if (__profiling) this.profEnd('filterElementsBySequenceConstraints', __t0);
     }
   }
 
@@ -2544,7 +2570,8 @@ export class Schema {
    * @returns The content model element, or null if not found
    */
   private findContentModel(elementDef: Element): Element | null {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       // If the node itself is already a content model, return it
       if (elementDef.localName === 'sequence' || elementDef.localName === 'choice' || elementDef.localName === 'all') {
@@ -2596,13 +2623,14 @@ export class Schema {
 
       return null;
     } finally {
-      this.profEnd('findContentModel', __t0);
+      if (__profiling) this.profEnd('findContentModel', __t0);
     }
   }
 
   // Cached content model resolver
   private getCachedContentModel(def: Element): Element | null {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       const cache = this.cache.contentModelCache!;
       if (cache.has(def)) { if (this.shouldProfileCaches) this.cacheStats.contentModelCache.hits++; return cache.get(def)!; }
@@ -2612,13 +2640,14 @@ export class Schema {
       if (this.shouldProfileCaches) this.cacheStats.contentModelCache.sets++;
       return model;
     } finally {
-      this.profEnd('getCachedContentModel', __t0);
+      if (__profiling) this.profEnd('getCachedContentModel', __t0);
     }
   }
 
   // Cached child elements discovery
   private getChildElementsCached(def: Element): Element[] {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       const cache = this.cache.childElementsByDef!;
       const cached = cache.get(def);
@@ -2629,13 +2658,14 @@ export class Schema {
       if (this.shouldProfileCaches) this.cacheStats.childElementsByDef.sets++;
       return elems;
     } finally {
-      this.profEnd('getChildElementsCached', __t0);
+      if (__profiling) this.profEnd('getChildElementsCached', __t0);
     }
   }
 
   // Cached annotation extraction with type fallback
   private getAnnotationCached(el: Element): string {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       const cache = this.cache.annotationCache!;
       const existing = cache.get(el);
@@ -2655,7 +2685,7 @@ export class Schema {
       if (this.shouldProfileCaches) this.cacheStats.annotationCache.sets++;
       return annotation;
     } finally {
-      this.profEnd('getAnnotationCached', __t0);
+      if (__profiling) this.profEnd('getAnnotationCached', __t0);
     }
   }
 
@@ -2665,7 +2695,8 @@ export class Schema {
    * @returns The content model element, or null if not found
    */
   private findDirectContentModel(parent: Element): Element | null {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       for (let i = 0; i < parent.childNodes.length; i++) {
         const child = parent.childNodes[i];
@@ -2705,7 +2736,7 @@ export class Schema {
 
       return null;
     } finally {
-      this.profEnd('findDirectContentModel', __t0);
+      if (__profiling) this.profEnd('findDirectContentModel', __t0);
     }
   }
 
@@ -2717,7 +2748,8 @@ export class Schema {
    * @returns Filtered elements that are valid as next elements
    */
   private getValidNextElementsInContentModel(contentModel: Element, previousSibling: Element, allChildren: Element[]): Element[] {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       const modelType = contentModel.localName;
 
@@ -2733,7 +2765,7 @@ export class Schema {
       // Unknown model type, return all children
       return allChildren;
     } finally {
-      this.profEnd('getValidNextElementsInContentModel', __t0);
+      if (__profiling) this.profEnd('getValidNextElementsInContentModel', __t0);
     }
   }
 
@@ -2745,7 +2777,8 @@ export class Schema {
    * @returns Valid next elements
    */
   private getValidNextInChoice(choice: Element, previousSibling: Element, allChildren: Element[]): Element[] {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       // If previousSibling belongs to a nested sequence option within this choice,
       // continue inside that same sequence arm and also allow restarting that arm (choice repetition).
@@ -2838,7 +2871,7 @@ export class Schema {
       // Otherwise, we are at the start of a choice occurrence; return only the start elements of each alternative.
       return this.getElementsInChoice(choice, allChildren);
     } finally {
-      this.profEnd('getValidNextInChoice', __t0);
+      if (__profiling) this.profEnd('getValidNextInChoice', __t0);
     }
   }
 
@@ -2850,7 +2883,8 @@ export class Schema {
    * @returns Valid next elements in the sequence
    */
   private getValidNextInSequence(sequence: Element, previousSibling: Element, allChildren: Element[]): Element[] {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       const sequenceItems: Element[] = [];
 
@@ -3157,7 +3191,7 @@ export class Schema {
 
       return dedup;
     } finally {
-      this.profEnd('getValidNextInSequence', __t0);
+      if (__profiling) this.profEnd('getValidNextInSequence', __t0);
     }
   }
 
@@ -3168,7 +3202,8 @@ export class Schema {
    * items like do_elseif/do_else when not continuing inside that sequence arm.
    */
   private getNonStartElementsInChoiceSequences(choice: Element): Set<string> {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       const names = new Set<string>();
 
@@ -3222,7 +3257,7 @@ export class Schema {
 
       return names;
     } finally {
-      this.profEnd('getNonStartElementsInChoiceSequences', __t0);
+      if (__profiling) this.profEnd('getNonStartElementsInChoiceSequences', __t0);
     }
   }
 
@@ -3233,7 +3268,8 @@ export class Schema {
    * @returns True if the item contains the element
    */
   private itemContainsElement(item: Element, element: Element, visited?: Set<Element>): boolean {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       // Initialize visited set for cycle detection across recursive traversals
       if (!visited) visited = new Set<Element>();
@@ -3293,7 +3329,7 @@ export class Schema {
       if (cached) { cached.set(element, false); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
       return false;
     } finally {
-      this.profEnd('itemContainsElement', __t0);
+      if (__profiling) this.profEnd('itemContainsElement', __t0);
     }
   }
 
@@ -3301,7 +3337,8 @@ export class Schema {
    * Find a nested sequence within a choice that contains the specified element
    */
   private findNestedSequenceContainingElement(root: Element, elementItem: Element): Element | null {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       const stack: Element[] = [root];
       const visited = new Set<Element>();
@@ -3347,7 +3384,7 @@ export class Schema {
       }
       return null;
     } finally {
-      this.profEnd('findNestedSequenceContainingElement', __t0);
+      if (__profiling) this.profEnd('findNestedSequenceContainingElement', __t0);
     }
   }
 
@@ -3358,7 +3395,8 @@ export class Schema {
    * @returns True if the choice contains the element
    */
   private choiceContainsElement(choice: Element, elementItem: Element, visited?: Set<Element>): boolean {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       // Initialize visited set for cycle detection across recursive traversals
       if (!visited) visited = new Set<Element>();
@@ -3397,7 +3435,7 @@ export class Schema {
 
       return false;
     } finally {
-      this.profEnd('choiceContainsElement', __t0);
+      if (__profiling) this.profEnd('choiceContainsElement', __t0);
     }
   }
 
@@ -3408,7 +3446,8 @@ export class Schema {
    * @returns Array of elements from the item
    */
   private getElementsFromSequenceItem(item: Element, allChildren: Element[]): Element[] {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       if (item.localName === 'element') {
         const elementName = item.getAttribute('name');
@@ -3447,7 +3486,7 @@ export class Schema {
 
       return [];
     } finally {
-      this.profEnd('getElementsFromSequenceItem', __t0);
+      if (__profiling) this.profEnd('getElementsFromSequenceItem', __t0);
     }
   }
 
@@ -3458,7 +3497,8 @@ export class Schema {
    * @returns Array of elements that are options in the choice
    */
   private getElementsInChoice(choice: Element, allChildren: Element[]): Element[] {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       const choiceElements: Element[] = [];
 
@@ -3508,7 +3548,7 @@ export class Schema {
 
       return choiceElements;
     } finally {
-      this.profEnd('getElementsInChoice', __t0);
+      if (__profiling) this.profEnd('getElementsInChoice', __t0);
     }
   }
 
@@ -3516,7 +3556,8 @@ export class Schema {
    * Get the set of elements that can legally start the provided sequence, honoring minOccurs on leading items.
    */
   private getStartElementsOfSequence(seq: Element, allChildren: Element[]): Element[] {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       const results: Element[] = [];
       for (let i = 0; i < seq.childNodes.length; i++) {
@@ -3539,7 +3580,7 @@ export class Schema {
         return true;
       });
     } finally {
-      this.profEnd('getStartElementsOfSequence', __t0);
+      if (__profiling) this.profEnd('getStartElementsOfSequence', __t0);
     }
   }
 
@@ -3547,7 +3588,8 @@ export class Schema {
    * Return the elements that can appear at the start position of a sequence item.
    */
   private getStartElementsFromItem(item: Element, allChildren: Element[]): Element[] {
-    const __t0 = this.profStart();
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
     try {
       if (item.localName === 'element') {
         const elementName = item.getAttribute('name');
@@ -3587,7 +3629,7 @@ export class Schema {
       }
       return [];
     } finally {
-      this.profEnd('getStartElementsFromItem', __t0);
+      if (__profiling) this.profEnd('getStartElementsFromItem', __t0);
     }
   }
 
