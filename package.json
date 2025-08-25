@@ -1,6 +1,6 @@
 {
   "name": "xsd-lookup",
-  "version": "1.10.1",
+  "version": "1.10.2",
   "description": "Multi-schema XSD lookup utility",
   "main": "dist/XsdReference.js",
   "scripts": {

@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.10.2](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.10.1...xsd-lookup@v1.10.2) (2025-08-25)
+
+### Bug Fixes
+
+* **Schema:** optimize element definition cache retrieval ([ca09117](https://github.com/chemodun/xsd-lookup/commit/ca09117bc6466137ea511ad96a3b5b66502f37f2))
+
+### Code Refactoring
+
+* **Schema:** add caching for valid child elements and model names ([75845de](https://github.com/chemodun/xsd-lookup/commit/75845de97082da82bbd68ce521df849f5aba190d))
+* **Schema:** change possibleChildrenResultCache to Record type ([7fda465](https://github.com/chemodun/xsd-lookup/commit/7fda4653e78ae5d10969ff662cb1f3f94d92f2a4))
+* **Schema:** enhance cache profiling and initialization ([da71a5a](https://github.com/chemodun/xsd-lookup/commit/da71a5abffd13f57a7311df78eeabd5dd6423799))
+* **Schema:** remove depth limit check in cycle detection ([b884291](https://github.com/chemodun/xsd-lookup/commit/b884291b049a7546dd2dff2341ca388c67763d0d))
+* **Schema:** remove profiling output from getPossibleChildElements ([b9c25e6](https://github.com/chemodun/xsd-lookup/commit/b9c25e6627802473ed38ab900ffb6c9066ad2241))
+* **Schema:** remove unused elementContexts and related logic ([8a7e5a7](https://github.com/chemodun/xsd-lookup/commit/8a7e5a7f132433ed9560c01cadf3233ef966e0ed))
+* **Schema:** remove unused methods for sequence handling ([a757517](https://github.com/chemodun/xsd-lookup/commit/a7575173448b18a74173144679ff5ac81caeb802))
+* **Schema:** update containsCache type for better structure ([14afeb2](https://github.com/chemodun/xsd-lookup/commit/14afeb2984e906eeab0c46f51f539ae8536fcc6b))
+* **Schema:** update possibleChildrenResultCache to WeakMap for improved performance ([6fd84ff](https://github.com/chemodun/xsd-lookup/commit/6fd84ffda5a4ad17e08a2b4b1cbc2fa3657e5a32))
+* **Schema:** use localName instead of nodeName to get rid of ns prefix ([be74440](https://github.com/chemodun/xsd-lookup/commit/be7444049530bd6c2f02e9d15156c4a101f4a25d))
+* **tests:** enable cache profiling via CLI flags ([87ac419](https://github.com/chemodun/xsd-lookup/commit/87ac419532a7ad5f27892ac3ff6e43cd1442b89f))
+* **tests:** improve XML file processing output ([2f476c2](https://github.com/chemodun/xsd-lookup/commit/2f476c21495843c19002b89a3f96ec53454740e9))
+* **XsdReference:** clean up comments and formatting ([34430fc](https://github.com/chemodun/xsd-lookup/commit/34430fc9b0554ab6165b55db29895bc6c167b2b2))
+
 ## [1.10.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.10.0...xsd-lookup@v1.10.1) (2025-08-18)
 
 ### Bug Fixes
