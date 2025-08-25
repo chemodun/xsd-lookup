@@ -39,7 +39,7 @@ interface HierarchyCache {
   validChildCache?: WeakMap<Element, Map<string, Map<string, boolean>>>; // parentDef -> prevKey -> childName -> boolean
   modelNextNamesCache?: WeakMap<Element, Map<string, Set<string>>>; // contentModel -> prevKey -> allowed names
   modelStartNamesCache?: WeakMap<Element, Set<string>>; // contentModel -> start names
-  containsCache?: WeakMap<Element, Map<string, boolean>>; // item Element -> elementName -> contains?
+  containsCache: WeakMap<Element, WeakMap<Element, boolean>>; // item Element -> elementName -> contains?
 }
 
 type CacheCounter = { hits: number; misses: number; sets: number };
@@ -149,7 +149,7 @@ export class Schema {
       validChildCache: new WeakMap<Element, Map<string, Map<string, boolean>>>(),
       modelNextNamesCache: new WeakMap<Element, Map<string, Set<string>>>(),
       modelStartNamesCache: new WeakMap<Element, Set<string>>(),
-      containsCache: new WeakMap<Element, Map<string, boolean>>()
+      containsCache: new WeakMap<Element, WeakMap<Element, boolean>>()
     };
   }
 
@@ -3076,13 +3076,13 @@ export class Schema {
   private itemContainsElement(item: Element, element: Element, visited?: Set<Element>): boolean {
     // Initialize visited set for cycle detection across recursive traversals
     if (!visited) visited = new Set<Element>();
-
+    let cached: WeakMap<Element, boolean> | undefined;
     // Fast path via containsCache keyed by item Element and child name
     const name = element.getAttribute('name') || '';
     if (name) {
-      let byName = this.cache.containsCache!.get(item);
-      if (!byName) { byName = new Map(); this.cache.containsCache!.set(item, byName); }
-      const existing = byName.get(name);
+      cached = this.cache.containsCache.get(item);
+      if (!cached) { cached = new WeakMap<Element, boolean>(); this.cache.containsCache.set(item, cached); }
+      const existing = cached.get(element);
       if (existing !== undefined) { if (this.shouldProfileCaches) this.cacheStats.containsCache.hits++; return existing; }
       if (this.shouldProfileCaches) this.cacheStats.containsCache.misses++;
       // We'll compute and store before return below
@@ -3090,44 +3090,46 @@ export class Schema {
 
     if (item.localName === 'element') {
       const res = (item === element);
-      if (name) { const byName = this.cache.containsCache!.get(item)!; byName.set(name, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
+      if (cached) { cached.set(element, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
       return res;
     } else if (item.localName === 'choice') {
       // Check if any element in the choice matches
       const res = this.choiceContainsElement(item, element, visited);
-      if (name) { const byName = this.cache.containsCache!.get(item)!; byName.set(name, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
+      if (cached) { cached.set(element, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
       return res;
     } else if (item.localName === 'sequence') {
-      if (visited.has(item)) return false;
-      visited.add(item);
-      // Check any child of the sequence
-      for (let i = 0; i < item.childNodes.length; i++) {
-        const child = item.childNodes[i];
-        if (child.nodeType === 1) {
-          if (this.itemContainsElement(child as Element, element, visited)) {
-            if (name) { const byName = this.cache.containsCache!.get(item)!; byName.set(name, true); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
-            return true;
+      if (!visited.has(item)) {
+        visited.add(item);
+        // Check any child of the sequence
+        for (let i = 0; i < item.childNodes.length; i++) {
+          const child = item.childNodes[i];
+          if (child.nodeType === 1) {
+            if (this.itemContainsElement(child as Element, element, visited)) {
+              if (cached) { cached.set(element, true); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
+              return true;
+            }
           }
         }
       }
-      if (name) { const byName = this.cache.containsCache!.get(item)!; byName.set(name, false); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
+      if (cached) { cached.set(element, false); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
       return false;
     } else if (item.localName === 'group') {
-      if (visited.has(item)) return false;
-      visited.add(item);
-      // Check if the group contains the element (resolve ref or definition)
-      const groupName = item.getAttribute('ref');
-      const grp = groupName ? this.schemaIndex.groups[groupName] : item;
-      if (grp) {
-        const model = this.findDirectContentModel(grp);
-        if (model) {
-          const res = this.itemContainsElement(model, element, visited);
-          if (name) { const byName = this.cache.containsCache!.get(item)!; byName.set(name, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
-          return res;
+      if (!visited.has(item)) {
+        visited.add(item);
+        // Check if the group contains the element (resolve ref or definition)
+        const groupName = item.getAttribute('ref');
+        const grp = groupName ? this.schemaIndex.groups[groupName] : item;
+        if (grp) {
+          const model = this.findDirectContentModel(grp);
+          if (model) {
+            const res = this.itemContainsElement(model, element, visited);
+            if (cached) { cached.set(element, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
+            return res;
+          }
         }
       }
     }
-    if (name) { const byName = this.cache.containsCache!.get(item)!; byName.set(name, false); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
+    if (cached) { cached.set(element, false); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
     return false;
   }
 
