@@ -24,11 +24,8 @@ interface SchemaIndex {
 }
 
 interface HierarchyCache {
-  hierarchyLookups: Map<string, Element | null>;
-  definitionReachability: Map<string, boolean>;
   attributeCache: WeakMap<Element, AttributeInfo[]>;
   enhancedAttributesCache: WeakMap<Element, EnhancedAttributeInfo[]>;
-  hierarchyValidation: Map<string, boolean>;
   elementDefinitionCache: Map<string, Element | undefined>; // New cache for getElementDefinition
   // Performance caches (not size-limited via ensureCacheSize):
   childElementsByDef?: WeakMap<Element, Element[]>; // cache of findAllElementsInDefinition
@@ -45,11 +42,8 @@ interface HierarchyCache {
 
 type CacheCounter = { hits: number; misses: number; sets: number };
 type CacheStats = {
-  hierarchyLookups: CacheCounter;
-  definitionReachability: CacheCounter;
   attributeCache: CacheCounter;
   enhancedAttributesCache: CacheCounter;
-  hierarchyValidation: CacheCounter;
   elementDefinitionCache: CacheCounter;
   childElementsByDef: CacheCounter;
   contentModelCache: CacheCounter;
@@ -155,11 +149,8 @@ export class Schema {
    */
   private initializeCaches(): void {
     this.cache = {
-      hierarchyLookups: new Map(),
-      definitionReachability: new Map(),
       attributeCache: new WeakMap<Element, AttributeInfo[]>(),
       enhancedAttributesCache: new WeakMap<Element, EnhancedAttributeInfo[]>(),
-      hierarchyValidation: new Map(),
       elementDefinitionCache: new Map(),
       childElementsByDef: new WeakMap<Element, Element[]>(),
       contentModelCache: new WeakMap<Element, Element | null>(),
@@ -176,11 +167,8 @@ export class Schema {
   private initializeCacheStats(): void {
     const zero = (): CacheCounter => ({ hits: 0, misses: 0, sets: 0 });
     this.cacheStats = {
-      hierarchyLookups: zero(),
-      definitionReachability: zero(),
       attributeCache: zero(),
       enhancedAttributesCache: zero(),
-      hierarchyValidation: zero(),
       elementDefinitionCache: zero(),
       childElementsByDef: zero(),
       contentModelCache: zero(),
@@ -305,22 +293,6 @@ export class Schema {
     const __profiling = this.shouldProfileMethods;
     const __t0 = __profiling ? this.profStart() : 0;
     try {
-      if (this.cache.hierarchyLookups.size > this.maxCacheSize) {
-        // Simple LRU: clear oldest half
-        const entries = Array.from(this.cache.hierarchyLookups.entries());
-        const toKeep = entries.slice(-Math.floor(this.maxCacheSize / 2));
-        this.cache.hierarchyLookups.clear();
-        toKeep.forEach(([key, value]) => this.cache.hierarchyLookups.set(key, value));
-      }
-
-      // Apply same logic to other caches
-      if (this.cache.definitionReachability.size > this.maxCacheSize) {
-        const entries = Array.from(this.cache.definitionReachability.entries());
-        const toKeep = entries.slice(-Math.floor(this.maxCacheSize / 2));
-        this.cache.definitionReachability.clear();
-        toKeep.forEach(([key, value]) => this.cache.definitionReachability.set(key, value));
-      }
-
       if (this.cache.elementDefinitionCache.size > this.maxCacheSize) {
         const entries = Array.from(this.cache.elementDefinitionCache.entries());
         const toKeep = entries.slice(-Math.floor(this.maxCacheSize / 2));
