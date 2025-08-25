@@ -2,11 +2,9 @@
 
 ## [1.10.2](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.10.1...xsd-lookup@v1.10.2) (2025-08-25)
 
-
 ### Bug Fixes
 
 * **Schema:** optimize element definition cache retrieval ([ca09117](https://github.com/chemodun/xsd-lookup/commit/ca09117bc6466137ea511ad96a3b5b66502f37f2))
-
 
 ### Code Refactoring
 
