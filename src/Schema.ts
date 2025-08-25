@@ -28,8 +28,8 @@ interface HierarchyCache {
   enhancedAttributesCache: WeakMap<Element, EnhancedAttributeInfo[]>;
   elementDefinitionCache: Map<string, Element | undefined>; // New cache for getElementDefinition
   // Performance caches (not size-limited via ensureCacheSize):
-  elementsInDefinition: WeakMap<Element, Element[]>; // cache of findAllElementsInDefinition
-  elementsInDefinitionByName: WeakMap<Element, Map<string, Element[]>>; // cache of findElementsInDefinition
+  elementsInDefinitionCache: WeakMap<Element, Element[]>; // cache of findAllElementsInDefinition
+  elementsInDefinitionByNameCache: WeakMap<Element, Map<string, Element[]>>; // cache of findElementsInDefinition
   contentModelCache?: WeakMap<Element, Element | null>; // cache of findContentModel
   annotationCache?: WeakMap<Element, string>; // cache of extractAnnotationText/type fallback
   possibleChildrenResultCache: WeakMap<Element, Map<string, Map<string, string>>>; // cache final results per key (Record for low overhead)
@@ -46,8 +46,8 @@ type CacheStats = {
   attributeCache: CacheCounter;
   enhancedAttributesCache: CacheCounter;
   elementDefinitionCache: CacheCounter;
-  elementsInDefinitionByName: CacheCounter;
-  elementsInDefinition: CacheCounter;
+  elementsInDefinitionByNameCache: CacheCounter;
+  elementsInDefinitionCache: CacheCounter;
   contentModelCache: CacheCounter;
   annotationCache: CacheCounter;
   possibleChildrenResultCache: CacheCounter;
@@ -154,8 +154,8 @@ export class Schema {
       attributeCache: new WeakMap<Element, AttributeInfo[]>(),
       enhancedAttributesCache: new WeakMap<Element, EnhancedAttributeInfo[]>(),
       elementDefinitionCache: new Map(),
-      elementsInDefinition: new WeakMap<Element, Element[]>(),
-      elementsInDefinitionByName: new WeakMap<Element, Map<string, Element[]>>(),
+      elementsInDefinitionCache: new WeakMap<Element, Element[]>(),
+      elementsInDefinitionByNameCache: new WeakMap<Element, Map<string, Element[]>>(),
       contentModelCache: new WeakMap<Element, Element | null>(),
       annotationCache: new WeakMap<Element, string>(),
       possibleChildrenResultCache: new WeakMap<Element, Map<string, Map<string, string>>>(),
@@ -173,8 +173,8 @@ export class Schema {
       attributeCache: zero(),
       enhancedAttributesCache: zero(),
       elementDefinitionCache: zero(),
-      elementsInDefinitionByName: zero(),
-      elementsInDefinition: zero(),
+      elementsInDefinitionByNameCache: zero(),
+      elementsInDefinitionCache: zero(),
       contentModelCache: zero(),
       annotationCache: zero(),
       possibleChildrenResultCache: zero(),
@@ -1235,19 +1235,19 @@ export class Schema {
     try {
       if (!parentDef) return [];
 
-      const cache = this.cache.elementsInDefinitionByName;
+      const cache = this.cache.elementsInDefinitionByNameCache;
       let cached: Map<string, Element[]>;
       if (cache.has(parentDef)) {
         cached = cache.get(parentDef)!;
         if (cached && cached.has(elementName)) {
-          if (this.shouldProfileCaches) this.cacheStats.elementsInDefinitionByName.hits++;
+          if (this.shouldProfileCaches) this.cacheStats.elementsInDefinitionByNameCache.hits++;
           return cached.get(elementName)!;
         }
       } else {
         cached = new Map();
         cache.set(parentDef, cached);
       }
-      if (this.shouldProfileCaches) this.cacheStats.elementsInDefinitionByName.misses++;
+      if (this.shouldProfileCaches) this.cacheStats.elementsInDefinitionByNameCache.misses++;
 
       const results: Element[] = [];
       let maxSearchDepth = 0;
@@ -1339,7 +1339,7 @@ export class Schema {
 
       searchInNode(typeNode);
 
-      if (this.shouldProfileCaches) this.cacheStats.elementsInDefinitionByName.sets++;
+      if (this.shouldProfileCaches) this.cacheStats.elementsInDefinitionByNameCache.sets++;
       cached.set(elementName, results);
       return results;
     } finally {
@@ -1361,13 +1361,13 @@ export class Schema {
     try {
       if (!parentDef) return [];
 
-      const cache = this.cache.elementsInDefinition;
+      const cache = this.cache.elementsInDefinitionCache;
       const cached = cache.get(parentDef);
       if (cached) {
-        if (this.shouldProfileCaches) this.cacheStats.elementsInDefinition.hits++;
+        if (this.shouldProfileCaches) this.cacheStats.elementsInDefinitionCache.hits++;
         return cached;
       }
-      if (this.shouldProfileCaches) this.cacheStats.elementsInDefinition.misses++;
+      if (this.shouldProfileCaches) this.cacheStats.elementsInDefinitionCache.misses++;
 
       const results: Element[] = [];
 
@@ -1447,7 +1447,7 @@ export class Schema {
       searchInNode(typeNode);
 
       cache.set(parentDef, results);
-      if (this.shouldProfileCaches) this.cacheStats.elementsInDefinition.sets++;
+      if (this.shouldProfileCaches) this.cacheStats.elementsInDefinitionCache.sets++;
 
       return results;
 
