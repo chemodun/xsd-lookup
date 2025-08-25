@@ -26,8 +26,7 @@ interface SchemaIndex {
 interface HierarchyCache {
   hierarchyLookups: Map<string, Element | null>;
   definitionReachability: Map<string, boolean>;
-  elementSearchResults: Map<string, Element[]>;
-  attributeCache: Map<string, AttributeInfo[]>;
+  attributeCache: WeakMap<Element, AttributeInfo[]>;
   hierarchyValidation: Map<string, boolean>;
   elementDefinitionCache: Map<string, Element | undefined>; // New cache for getElementDefinition
   // Performance caches (not size-limited via ensureCacheSize):
@@ -47,7 +46,6 @@ type CacheCounter = { hits: number; misses: number; sets: number };
 type CacheStats = {
   hierarchyLookups: CacheCounter;
   definitionReachability: CacheCounter;
-  elementSearchResults: CacheCounter;
   attributeCache: CacheCounter;
   hierarchyValidation: CacheCounter;
   elementDefinitionCache: CacheCounter;
@@ -157,8 +155,7 @@ export class Schema {
     this.cache = {
       hierarchyLookups: new Map(),
       definitionReachability: new Map(),
-      elementSearchResults: new Map(),
-      attributeCache: new Map(),
+      attributeCache: new WeakMap<Element, AttributeInfo[]>(),
       hierarchyValidation: new Map(),
       elementDefinitionCache: new Map(),
       childElementsByDef: new WeakMap<Element, Element[]>(),
@@ -178,7 +175,6 @@ export class Schema {
     this.cacheStats = {
       hierarchyLookups: zero(),
       definitionReachability: zero(),
-      elementSearchResults: zero(),
       attributeCache: zero(),
       hierarchyValidation: zero(),
       elementDefinitionCache: zero(),
@@ -319,20 +315,6 @@ export class Schema {
         const toKeep = entries.slice(-Math.floor(this.maxCacheSize / 2));
         this.cache.definitionReachability.clear();
         toKeep.forEach(([key, value]) => this.cache.definitionReachability.set(key, value));
-      }
-
-      if (this.cache.elementSearchResults.size > this.maxCacheSize) {
-        const entries = Array.from(this.cache.elementSearchResults.entries());
-        const toKeep = entries.slice(-Math.floor(this.maxCacheSize / 2));
-        this.cache.elementSearchResults.clear();
-        toKeep.forEach(([key, value]) => this.cache.elementSearchResults.set(key, value));
-      }
-
-      if (this.cache.attributeCache.size > this.maxCacheSize) {
-        const entries = Array.from(this.cache.attributeCache.entries());
-        const toKeep = entries.slice(-Math.floor(this.maxCacheSize / 2));
-        this.cache.attributeCache.clear();
-        toKeep.forEach(([key, value]) => this.cache.attributeCache.set(key, value));
       }
 
       if (this.cache.elementDefinitionCache.size > this.maxCacheSize) {
@@ -1475,80 +1457,33 @@ export class Schema {
     const __profiling = this.shouldProfileMethods;
     const __t0 = __profiling ? this.profStart() : 0;
     try {
-      // STRICT HIERARCHY RULE: If hierarchy provided, only search in hierarchy context
-      // Never fall back to global elements when hierarchy is specified
-
-      // If no hierarchy provided, only search global elements
-      if (hierarchy.length === 0) {
-        return this.getElementAttributesWithHierarchy(elementName, []);
-      }
-
-      // Step 1: Use progressive hierarchy search to find attributes
-      // Stop as soon as we find any attributes at any depth
-      // for (let contextDepth = 1; contextDepth <= hierarchy.length; contextDepth++) {
-      //   // Take the first contextDepth elements (immediate context)
-      //   const currentContext = hierarchy.slice(0, contextDepth);
-
-      // const contextAttrs = this.getElementAttributesWithHierarchy(elementName, currentContext);
-      const contextAttrs = this.getElementAttributesWithHierarchy(elementName, hierarchy);
-      if (contextAttrs.length > 0) {
-        // Found attributes at this depth - return them immediately
-        return contextAttrs;
-      }
-      // }
-
-      // No attributes found at any depth - do NOT fall back to global search
-      return [];
-    } finally {
-      if (__profiling) this.profEnd('getElementAttributes', __t0);
-    }
-  }
-
-  /**
-   * Get element attributes with hierarchy context for internal use
-   * @param elementName The element name to get attributes for
-   * @param hierarchy The element hierarchy in bottom-up order
-   * @returns Array of attribute information
-   */
-  private getElementAttributesWithHierarchy(elementName: string, hierarchy: string[]): AttributeInfo[] {
-    const __profiling = this.shouldProfileMethods;
-    const __t0 = __profiling ? this.profStart() : 0;
-    try {
-      // Create cache key
-      const cacheKey = `attrs:${elementName}:${hierarchy.join('>')}`;
-
-      // Check cache first
-      if (this.cache.attributeCache.has(cacheKey)) {
-        return this.cache.attributeCache.get(cacheKey)!;
-      }
-
       const attributes: Record<string, Element> = {};
 
       // Get the correct element definition based on hierarchical context
       const def = this.getElementDefinition(elementName, hierarchy);
       if (!def) {
         // Cache empty result
-        const emptyResult: AttributeInfo[] = [];
-        this.cache.attributeCache.set(cacheKey, emptyResult);
-        this.ensureCacheSize();
-        return emptyResult;
+        return [];
       }
 
-      // Use the definition
-      const bestDef = def;
+      const cache = this.cache.attributeCache;
+      if (cache.has(def)) {
+        if (this.shouldProfileCaches) this.cacheStats.attributeCache.hits++;
+        return cache.get(def)!;
+      }
+      if (this.shouldProfileCaches) this.cacheStats.attributeCache.misses++;
 
       // Collect attributes from the element definition
-      this.collectAttrs(bestDef, attributes);
+      this.collectAttrs(def, attributes);
 
       const result = Object.entries(attributes).map(([name, node]) => ({ name, node }));
 
-      // Cache the result
-      this.cache.attributeCache.set(cacheKey, result);
-      this.ensureCacheSize();
+      cache.set(def, result);
+      if (this.shouldProfileCaches) this.cacheStats.attributeCache.sets++;
 
       return result;
     } finally {
-      if (__profiling) this.profEnd('getElementAttributesWithHierarchy', __t0);
+      if (__profiling) this.profEnd('getElementAttributes', __t0);
     }
   }
 
