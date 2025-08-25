@@ -196,21 +196,43 @@ export class Schema {
 
   private printCacheStats(): void {
     if (!this.shouldProfileCaches) return;
+    const entries = Object.keys(this.cacheStats) as (keyof CacheStats)[];
+    const rows = entries
+      .map((name) => {
+        const c = this.cacheStats[name];
+        return { name: String(name), hits: c.hits, misses: c.misses, sets: c.sets };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const headers = ['Name', 'Hits', 'Misses', 'Sets'];
+    const col1W = Math.max(headers[0].length, ...rows.map(r => r.name.length));
+    const col2W = Math.max(headers[1].length, ...rows.map(r => String(r.hits).length));
+    const col3W = Math.max(headers[2].length, ...rows.map(r => String(r.misses).length));
+    const col4W = Math.max(headers[3].length, ...rows.map(r => String(r.sets).length));
+    const pad = (s: string, w: number) => s + ' '.repeat(Math.max(0, w - s.length));
+
     const lines: string[] = [];
-    const fmt = (name: keyof CacheStats, c: CacheCounter) => `${name}: hits=${c.hits}, misses=${c.misses}, sets=${c.sets}`;
     lines.push(`=== XSD-Lookup Cache Stats for "${this.name}" ===`);
     lines.push(
-      fmt('elementDefinitionCache', this.cacheStats.elementDefinitionCache),
-      fmt('childElementsByDef', this.cacheStats.childElementsByDef),
-      fmt('contentModelCache', this.cacheStats.contentModelCache),
-      fmt('annotationCache', this.cacheStats.annotationCache),
-      fmt('possibleChildrenResultCache', this.cacheStats.possibleChildrenResultCache),
-      fmt('validChildCache', this.cacheStats.validChildCache),
-      fmt('modelStartNamesCache', this.cacheStats.modelStartNamesCache),
-      fmt('modelNextNamesCache', this.cacheStats.modelNextNamesCache),
-      fmt('containsCache', this.cacheStats.containsCache),
-      fmt('validationsCache', this.cacheStats.validationsCache)
+      pad(headers[0], col1W) + '  ' +
+      pad(headers[1], col2W) + '  ' +
+      pad(headers[2], col3W) + '  ' +
+      pad(headers[3], col4W)
     );
+    lines.push(
+      '-'.repeat(col1W) + '  ' +
+      '-'.repeat(col2W) + '  ' +
+      '-'.repeat(col3W) + '  ' +
+      '-'.repeat(col4W)
+    );
+    for (const r of rows) {
+      lines.push(
+        pad(r.name, col1W) + '  ' +
+        pad(String(r.hits), col2W) + '  ' +
+        pad(String(r.misses), col3W) + '  ' +
+        pad(String(r.sets), col4W)
+      );
+    }
     // eslint-disable-next-line no-console
     console.log(lines.join('\n'));
   }
@@ -226,18 +248,44 @@ export class Schema {
   }
   private printMethodStats(): void {
     if (!this.shouldProfileMethods) return;
-    let entries = Object.entries(this.methodTimings).sort((a, b) => b[1] - a[1]);
+    const rows = Object.entries(this.methodTimings)
+      .map(([name, total]) => {
+        const calls = this.methodCalls[name] || 0;
+        const avg = calls > 0 ? total / calls : 0;
+        return { name, total, calls, avg };
+      })
+      .sort((a, b) => b.total - a.total);
+
+    if (rows.length === 0) return;
+
+    const headers = ['Name', 'Total Time (ms)', 'Count Calls', 'Average Time (ms)'];
+    const col1W = Math.max(headers[0].length, ...rows.map(r => r.name.length));
+    const col2W = Math.max(headers[1].length, ...rows.map(r => r.total.toFixed(3).length));
+    const col3W = Math.max(headers[2].length, ...rows.map(r => String(r.calls).length));
+    const col4W = Math.max(headers[3].length, ...rows.map(r => r.avg.toFixed(3).length));
+    const pad = (s: string, w: number) => s + ' '.repeat(Math.max(0, w - s.length));
+
     const lines: string[] = [];
-    lines.push(`=== XSD-Lookup Method Timings for "${this.name}" (total ms) ===`);
-    for (const [name, total] of entries) {
-      lines.push(`${name}: ${total.toFixed(3)}ms`);
-    }
-    // Print call counts in the same order as timings, descending by total time
-    lines.push(`=== XSD-Lookup Method Call Counts for "${this.name}" ===`);
-    entries = Object.entries(this.methodCalls).sort((a, b) => b[1] - a[1]);
-    for (const [name] of entries) {
-      const calls = this.methodCalls[name] || 0;
-      lines.push(`${name}: ${calls}`);
+    lines.push(`=== XSD-Lookup Method Profile for "${this.name}" ===`);
+    lines.push(
+      pad(headers[0], col1W) + '  ' +
+      pad(headers[1], col2W) + '  ' +
+      pad(headers[2], col3W) + '  ' +
+      pad(headers[3], col4W)
+    );
+    lines.push(
+      '-'.repeat(col1W) + '  ' +
+      '-'.repeat(col2W) + '  ' +
+      '-'.repeat(col3W) + '  ' +
+      '-'.repeat(col4W)
+    );
+    for (const r of rows) {
+      lines.push(
+        pad(r.name, col1W) + '  ' +
+        pad(r.total.toFixed(3), col2W) + '  ' +
+        pad(String(r.calls), col3W) + '  ' +
+        pad(r.avg.toFixed(3), col4W)
+      );
     }
     // eslint-disable-next-line no-console
     console.log(lines.join('\n'));
