@@ -8,7 +8,10 @@
     "clean": "rimraf dist",
     "rebuild": "npm run clean && npm run build",
     "test": "node tests/test_all_files_comprehensive.js",
-    "test:full": "npm run build && npm test",
+    "test:cache": "node tests/test_all_files_comprehensive.js --profile-caches",
+    "test:build": "npm run build && npm test",
+    "test:build:cache": "npm run build && npm run test:cache",
+    "test:full": "npm run test:build",
     "prepublishOnly": "npm run rebuild && npm test"
   },
   "author": "Chem O'Dun <chemodun@gmail.com>",
