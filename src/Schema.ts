@@ -40,6 +40,7 @@ interface HierarchyCache {
   modelNextNamesCache?: WeakMap<Element, Map<string, Set<string>>>; // contentModel -> prevKey -> allowed names
   modelStartNamesCache?: WeakMap<Element, Set<string>>; // contentModel -> start names
   containsCache: WeakMap<Element, WeakMap<Element, boolean>>; // item Element -> elementName -> contains?
+  validationsCache: WeakMap<Element, Partial<EnhancedAttributeInfo>>; // element -> validationName -> isValid
 }
 
 type CacheCounter = { hits: number; misses: number; sets: number };
@@ -58,6 +59,7 @@ type CacheStats = {
   modelStartNamesCache: CacheCounter;
   modelNextNamesCache: CacheCounter;
   containsCache: CacheCounter;
+  validationsCache: CacheCounter;
 };
 
 export interface ElementLocation {
@@ -153,7 +155,8 @@ export class Schema {
       validChildCache: new WeakMap<Element, Map<string, Map<string, boolean>>>(),
       modelNextNamesCache: new WeakMap<Element, Map<string, Set<string>>>(),
       modelStartNamesCache: new WeakMap<Element, Set<string>>(),
-      containsCache: new WeakMap<Element, WeakMap<Element, boolean>>()
+      containsCache: new WeakMap<Element, WeakMap<Element, boolean>>(),
+      validationsCache: new WeakMap<Element, Partial<EnhancedAttributeInfo>>()
     };
   }
 
@@ -173,7 +176,8 @@ export class Schema {
       validChildCache: zero(),
       modelStartNamesCache: zero(),
       modelNextNamesCache: zero(),
-      containsCache: zero()
+      containsCache: zero(),
+      validationsCache: zero(),
     };
   }
 
@@ -191,7 +195,8 @@ export class Schema {
       fmt('validChildCache', this.cacheStats.validChildCache),
       fmt('modelStartNamesCache', this.cacheStats.modelStartNamesCache),
       fmt('modelNextNamesCache', this.cacheStats.modelNextNamesCache),
-      fmt('containsCache', this.cacheStats.containsCache)
+      fmt('containsCache', this.cacheStats.containsCache),
+      fmt('validationsCache', this.cacheStats.validationsCache)
     );
     // eslint-disable-next-line no-console
     console.log(lines.join('\n'));
@@ -1491,6 +1496,12 @@ export class Schema {
       const typeNode = this.schemaIndex.types[typeName];
       if (!typeNode) return {};
 
+      const cache = this.cache.validationsCache;
+      if (cache.has(typeNode)) {
+        if (this.shouldProfileCaches) this.cacheStats.validationsCache.hits++;
+        return cache.get(typeNode)!;
+      }
+      if (this.shouldProfileCaches) this.cacheStats.validationsCache.misses++;
       const validationInfo: Partial<EnhancedAttributeInfo> = {};
       const extractValidationRules = (node: Element): void => {
         if (!node || node.nodeType !== 1) return;
@@ -1589,7 +1600,8 @@ export class Schema {
       if (validationInfo.enumValues && validationInfo.enumValues.length > 0) {
         validationInfo.enumValuesAnnotations = this.extractEnumValueAnnotations(typeNode);
       }
-
+      cache.set(typeNode, validationInfo);
+      if (this.shouldProfileCaches) this.cacheStats.validationsCache.sets++;
       return validationInfo;
     } finally {
       if (__profiling) this.profEnd('getTypeValidationInfo', __t0);
@@ -1603,6 +1615,13 @@ export class Schema {
     const __profiling = this.shouldProfileMethods;
     const __t0 = __profiling ? this.profStart() : 0;
     try {
+      const cache = this.cache.validationsCache;
+      if (cache.has(attributeNode)) {
+        if (this.shouldProfileCaches) this.cacheStats.validationsCache.hits++;
+        return cache.get(attributeNode)!;
+      }
+      if (this.shouldProfileCaches) this.cacheStats.validationsCache.misses++;
+
       const validationInfo: Partial<EnhancedAttributeInfo> = {};
       // Look for inline xs:simpleType definition within the attribute node
       for (let i = 0; i < attributeNode.childNodes.length; i++) {
@@ -1622,9 +1641,34 @@ export class Schema {
         }
       }
 
+      cache.set(attributeNode, validationInfo);
+      if (this.shouldProfileCaches) this.cacheStats.validationsCache.sets++;
       return validationInfo;
     } finally {
       if (__profiling) this.profEnd('getInlineTypeValidationInfo', __t0);
+    }
+  }
+
+  /**
+   * Get cached validation information for a node
+   */
+  private getCachedValidationInfo(node: Element): Partial<EnhancedAttributeInfo> {
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
+    try {
+      const cache = this.cache.validationsCache;
+      if (cache.has(node)) {
+        if (this.shouldProfileCaches) this.cacheStats.validationsCache.hits++;
+        return cache.get(node)!;
+      }
+      if (this.shouldProfileCaches) this.cacheStats.validationsCache.misses++;
+      const validationInfo: Partial<EnhancedAttributeInfo> = {};
+      this.extractValidationRulesFromNode(node, validationInfo);
+      cache.set(node, validationInfo);
+      if (this.shouldProfileCaches) this.cacheStats.validationsCache.sets++;
+      return validationInfo;
+    } finally {
+      if (__profiling) this.profEnd('getCachedValidationInfo', __t0);
     }
   }
 
@@ -3709,8 +3753,7 @@ export class Schema {
     const allAnnotations = new Map<string, string>();
 
     // First, try to extract direct enumeration values
-    const validationInfo: Partial<EnhancedAttributeInfo> = {};
-    this.extractValidationRulesFromNode(typeNode, validationInfo);
+    const validationInfo: Partial<EnhancedAttributeInfo> = this.getCachedValidationInfo(typeNode);
 
     if (validationInfo.enumValues && validationInfo.enumValues.length > 0) {
       allEnumValues.push(...validationInfo.enumValues);
