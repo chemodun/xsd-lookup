@@ -249,14 +249,13 @@ export class Schema {
    * @param node The current node to examine
    * @param parentName The name of the parent element
    * @param elements Array to collect found elements into
-   * @param ns The XML Schema namespace prefix
    * @returns Array of collected elements with their parent information
    */
-  private collectElements(node: Node, parentName: string | null, elements: ElementWithParent[] = [], ns: string = 'xs:'): ElementWithParent[] {
+  private collectElements(node: Node, parentName: string | null, elements: ElementWithParent[] = []): ElementWithParent[] {
     if (!node) return elements;
     if (node.nodeType === 1) {
       const element = node as Element;
-      if (element.nodeName === ns + 'element' && element.getAttribute('name')) {
+      if (element.localName === 'element' && element.getAttribute('name')) {
         elements.push({
           name: element.getAttribute('name')!,
           parent: parentName,
@@ -265,7 +264,7 @@ export class Schema {
       }
       // Recurse into children
       for (let i = 0; i < element.childNodes.length; i++) {
-        this.collectElements(element.childNodes[i], element.getAttribute('name') || parentName, elements, ns);
+        this.collectElements(element.childNodes[i], element.getAttribute('name') || parentName, elements);
       }
     }
     return elements;
@@ -289,7 +288,7 @@ export class Schema {
    * @param ns The XML Schema namespace prefix
    * @returns Complete schema index with all definitions and contexts
    */
-  private indexSchema(root: Element, ns: string = 'xs:'): SchemaIndex {
+  private indexSchema(root: Element): SchemaIndex {
     const elements: Record<string, Element[]> = {};  // Changed to arrays
     const groups: Record<string, Element> = {};
     const attributeGroups: Record<string, Element> = {};
@@ -301,21 +300,21 @@ export class Schema {
       if (child.nodeType === 1) {
         const element = child as Element;
 
-        if (element.nodeName === ns + 'element' && element.getAttribute('name')) {
+        if (element.localName === 'element' && element.getAttribute('name')) {
           const name = element.getAttribute('name')!;
           if (!elements[name]) elements[name] = [];
           elements[name].push(element);
         }
-        else if (element.nodeName === ns + 'group' && element.getAttribute('name')) {
+        else if (element.localName === 'group' && element.getAttribute('name')) {
           groups[element.getAttribute('name')!] = element;
         }
-        else if (element.nodeName === ns + 'attributeGroup' && element.getAttribute('name')) {
+        else if (element.localName === 'attributeGroup' && element.getAttribute('name')) {
           attributeGroups[element.getAttribute('name')!] = element;
         }
-        else if (element.nodeName === ns + 'complexType' && element.getAttribute('name')) {
+        else if (element.localName === 'complexType' && element.getAttribute('name')) {
           types[element.getAttribute('name')!] = element;
         }
-        else if (element.nodeName === ns + 'simpleType' && element.getAttribute('name')) {
+        else if (element.localName === 'simpleType' && element.getAttribute('name')) {
           types[element.getAttribute('name')!] = element;
         }
       }
@@ -327,16 +326,16 @@ export class Schema {
       const element = node as Element;
 
       // Only collect types and groups, not nested elements
-      if (element.nodeName === ns + 'group' && element.getAttribute('name')) {
+      if (element.localName === 'group' && element.getAttribute('name')) {
         groups[element.getAttribute('name')!] = element;
       }
-      if (element.nodeName === ns + 'attributeGroup' && element.getAttribute('name')) {
+      if (element.localName === 'attributeGroup' && element.getAttribute('name')) {
         attributeGroups[element.getAttribute('name')!] = element;
       }
-      if (element.nodeName === ns + 'complexType' && element.getAttribute('name')) {
+      if (element.localName === 'complexType' && element.getAttribute('name')) {
         types[element.getAttribute('name')!] = element;
       }
-      if (element.nodeName === ns + 'simpleType' && element.getAttribute('name')) {
+      if (element.localName === 'simpleType' && element.getAttribute('name')) {
         types[element.getAttribute('name')!] = element;
       }
 
@@ -363,8 +362,6 @@ export class Schema {
     types: Record<string, Element>
   ): Record<string, ElementContext[]> {
     const elementContexts: Record<string, ElementContext[]> = {};
-    const ns = 'xs:';
-
     // Build type-to-element mapping
     const typeToElements = this.buildTypeToElementMapping(globalElements, types);
 
@@ -383,7 +380,7 @@ export class Schema {
 
     // Then, traverse all groups to find elements defined within them
     for (const [groupName, groupElement] of Object.entries(groups)) {
-      this.extractElementsFromGroup(groupElement, groupName, elementContexts, groups, types, ns);
+      this.extractElementsFromGroup(groupElement, groupName, elementContexts, groups, types);
     }
 
     // IMPORTANT: Also traverse all global elements to find inline element definitions
@@ -391,7 +388,7 @@ export class Schema {
     // AND handles type references in context (e.g., library element using interrupt_library type)
     for (const [elementName, elements] of Object.entries(globalElements)) {
       for (const element of elements) {
-        this.extractInlineElementsFromElement(element, elementName, elementContexts, groups, types, ns, [elementName]);
+        this.extractInlineElementsFromElement(element, elementName, elementContexts, groups, types, [elementName]);
       }
     }
 
@@ -407,7 +404,6 @@ export class Schema {
     elementContexts: Record<string, ElementContext[]>,
     groups: Record<string, Element>,
     types: Record<string, Element>,
-    ns: string,
     visitedGroups: Set<string> = new Set()
   ): void {
     // Prevent infinite recursion in group references
@@ -418,7 +414,7 @@ export class Schema {
       if (!node || node.nodeType !== 1) return;
 
       // If this is an element definition, add it to contexts
-      if (node.nodeName === ns + 'element' && node.getAttribute('name')) {
+      if (node.localName === 'element' && node.getAttribute('name')) {
         const elementName = node.getAttribute('name')!;
 
         if (!elementContexts[elementName]) elementContexts[elementName] = [];
@@ -439,16 +435,16 @@ export class Schema {
       }
 
       // If this is a group reference, recursively extract from the referenced group
-      if (node.nodeName === ns + 'group' && node.getAttribute('ref')) {
+      if (node.localName === 'group' && node.getAttribute('ref')) {
         const refGroupName = node.getAttribute('ref')!;
         const refGroup = groups[refGroupName];
         if (refGroup && !visitedGroups.has(refGroupName)) {
-          this.extractElementsFromGroup(refGroup, refGroupName, elementContexts, groups, types, ns, new Set(visitedGroups));
+          this.extractElementsFromGroup(refGroup, refGroupName, elementContexts, groups, types, new Set(visitedGroups));
         }
       }
 
       // Handle type extensions - extract elements from the base type
-      if (node.nodeName === ns + 'extension' && node.getAttribute('base')) {
+      if (node.localName === 'extension' && node.getAttribute('base')) {
         const baseName = node.getAttribute('base')!;
         const baseType = types[baseName];
         if (baseType) {
@@ -457,11 +453,11 @@ export class Schema {
           let parentElement = node.parentNode;
           while (parentElement && parentElement.nodeType === 1) {
             const parentElem = parentElement as Element;
-            if (parentElem.nodeName === ns + 'element') {
+            if (parentElem.localName === 'element') {
               const parentElementName = parentElem.getAttribute('name');
               if (parentElementName) {
                 // Extract elements from the base type with the parent element as context
-                this.extractElementsFromType(baseType, baseName, elementContexts, groups, types, ns, new Set(), [parentElementName]);
+                this.extractElementsFromType(baseType, baseName, elementContexts, groups, types, new Set(), [parentElementName]);
               }
               break;
             }
@@ -492,7 +488,6 @@ export class Schema {
     elementContexts: Record<string, ElementContext[]>,
     groups: Record<string, Element>,
     types: Record<string, Element>,
-    ns: string,
     parentContext: string[],
     visitedGroups: Set<string> = new Set()
   ): void {
@@ -504,7 +499,7 @@ export class Schema {
       if (!node || node.nodeType !== 1) return;
 
       // If this is an element definition, add it to contexts with group and parent info
-      if (node.nodeName === ns + 'element' && node.getAttribute('name')) {
+      if (node.localName === 'element' && node.getAttribute('name')) {
         const elementName = node.getAttribute('name')!;
 
         if (!elementContexts[elementName]) elementContexts[elementName] = [];
@@ -518,16 +513,16 @@ export class Schema {
       }
 
       // If this is a group reference, recursively extract
-      if (node.nodeName === ns + 'group' && node.getAttribute('ref')) {
+      if (node.localName === 'group' && node.getAttribute('ref')) {
         const refGroupName = node.getAttribute('ref')!;
         const refGroup = groups[refGroupName];
         if (refGroup && !visitedGroups.has(refGroupName)) {
-          this.extractElementsFromGroupWithParentContext(refGroup, refGroupName, elementContexts, groups, types, ns, parentContext, new Set(visitedGroups));
+          this.extractElementsFromGroupWithParentContext(refGroup, refGroupName, elementContexts, groups, types, parentContext, new Set(visitedGroups));
         }
       }
 
       // Handle type extensions - extract elements from the base type
-      if (node.nodeName === ns + 'extension' && node.getAttribute('base')) {
+      if (node.localName === 'extension' && node.getAttribute('base')) {
         const baseName = node.getAttribute('base')!;
         const baseType = types[baseName];
         if (baseType) {
@@ -536,11 +531,11 @@ export class Schema {
           let parentElement = node.parentNode;
           while (parentElement && parentElement.nodeType === 1) {
             const parentElem = parentElement as Element;
-            if (parentElem.nodeName === ns + 'element') {
+            if (parentElem.localName === 'element') {
               const parentElementName = parentElem.getAttribute('name');
               if (parentElementName) {
                 // Extract elements from the base type with the parent element as context
-                this.extractElementsFromType(baseType, baseName, elementContexts, groups, types, ns, new Set(), [parentElementName, ...parentContext]);
+                this.extractElementsFromType(baseType, baseName, elementContexts, groups, types, new Set(), [parentElementName, ...parentContext]);
               }
               break;
             }
@@ -570,7 +565,6 @@ export class Schema {
     elementContexts: Record<string, ElementContext[]>,
     groups: Record<string, Element>,
     types: Record<string, Element>,
-    ns: string,
     visitedTypes: Set<string> = new Set(),
     parentElementNames: string[] = []
   ): void {
@@ -585,7 +579,7 @@ export class Schema {
       if (!node || node.nodeType !== 1) return;
 
       // If this is an element definition, add it to contexts
-      if (node.nodeName === ns + 'element' && node.getAttribute('name')) {
+      if (node.localName === 'element' && node.getAttribute('name')) {
         const elementName = node.getAttribute('name')!;
 
         if (!elementContexts[elementName]) elementContexts[elementName] = [];
@@ -607,30 +601,30 @@ export class Schema {
           const typeAttr = node.getAttribute('type');
           if (typeAttr && types[typeAttr] && !visitedTypes.has(typeAttr)) {
             // Extract elements from the referenced type with this element as parent
-            this.extractElementsFromType(types[typeAttr], typeAttr, elementContexts, groups, types, ns, new Set(), [elementName, ...currentParents]);
+            this.extractElementsFromType(types[typeAttr], typeAttr, elementContexts, groups, types, new Set(), [elementName, ...currentParents]);
           }
         }
       }
 
       // If this is a group reference, extract elements from the group and mark with group membership
-      if (node.nodeName === ns + 'group' && node.getAttribute('ref')) {
+      if (node.localName === 'group' && node.getAttribute('ref')) {
         const refGroupName = node.getAttribute('ref')!;
         const refGroup = groups[refGroupName];
         if (refGroup) {
           // Extract elements from the group and mark them with group membership
           // Only pass the immediate parent, not the full chain
           const immediateParent = currentParents.length > 0 ? [currentParents[0]] : [];
-          this.extractElementsFromGroupWithParentContext(refGroup, refGroupName, elementContexts, groups, types, ns, immediateParent);
+          this.extractElementsFromGroupWithParentContext(refGroup, refGroupName, elementContexts, groups, types, immediateParent);
         }
       }
 
       // Handle type extensions - extract elements from the base type
-      if (node.nodeName === ns + 'extension' && node.getAttribute('base')) {
+      if (node.localName === 'extension' && node.getAttribute('base')) {
         const baseName = node.getAttribute('base')!;
         const baseType = types[baseName];
         if (baseType && !visitedTypes.has(baseName)) {
           // Extract elements from the base type with the same parent context
-          this.extractElementsFromType(baseType, baseName, elementContexts, groups, types, ns, new Set([...visitedTypes, baseName]), currentParents);
+          this.extractElementsFromType(baseType, baseName, elementContexts, groups, types, new Set([...visitedTypes, baseName]), currentParents);
         }
       }
 
@@ -657,14 +651,13 @@ export class Schema {
     elementContexts: Record<string, ElementContext[]>,
     groups: Record<string, Element>,
     types: Record<string, Element>,
-    ns: string,
     initialParents: string[] = []
   ): void {
     const extractInlineElements = (node: Element, currentParents: string[], isRootElement: boolean = false): void => {
       if (!node || node.nodeType !== 1) return;
 
       // If this is an inline element definition, add it to contexts
-      if (node.nodeName === ns + 'element' && node.getAttribute('name')) {
+      if (node.localName === 'element' && node.getAttribute('name')) {
         const elementName = node.getAttribute('name')!;
 
         if (!elementContexts[elementName]) elementContexts[elementName] = [];
@@ -688,7 +681,7 @@ export class Schema {
         const typeAttr = node.getAttribute('type');
         if (typeAttr && types[typeAttr]) {
           // Extract elements from the referenced type with this element as parent
-          this.extractElementsFromType(types[typeAttr], typeAttr, elementContexts, groups, types, ns, new Set(), [elementName]);
+          this.extractElementsFromType(types[typeAttr], typeAttr, elementContexts, groups, types, new Set(), [elementName]);
         }
 
         for (let i = 0; i < node.childNodes.length; i++) {
@@ -701,21 +694,21 @@ export class Schema {
       }
 
       // If this is a group reference, extract elements from the group
-      if (node.nodeName === ns + 'group' && node.getAttribute('ref')) {
+      if (node.localName === 'group' && node.getAttribute('ref')) {
         const refGroupName = node.getAttribute('ref')!;
         const refGroup = groups[refGroupName];
         if (refGroup) {
-          this.extractElementsFromGroupWithParentContext(refGroup, refGroupName, elementContexts, groups, types, ns, currentParents);
+          this.extractElementsFromGroupWithParentContext(refGroup, refGroupName, elementContexts, groups, types, currentParents);
         }
       }
 
       // Handle type extensions - extract elements from the base type
-      if (node.nodeName === ns + 'extension' && node.getAttribute('base')) {
+      if (node.localName === 'extension' && node.getAttribute('base')) {
         const baseName = node.getAttribute('base')!;
         const baseType = types[baseName];
         if (baseType) {
           // Extract elements from the base type with the same parent context
-          this.extractElementsFromType(baseType, baseName, elementContexts, groups, types, ns, new Set(), currentParents);
+          this.extractElementsFromType(baseType, baseName, elementContexts, groups, types, new Set(), currentParents);
         }
       }
 
@@ -822,14 +815,13 @@ export class Schema {
   // if the element lacks its own annotation with text. No hardcoding: fully data-driven by XSD.
   private enrichElementAnnotationFromTypeIfMissing(elementDef: Element): void {
     if (!elementDef || elementDef.nodeType !== 1) return;
-    const ns = 'xs:';
-    if (elementDef.nodeName !== ns + 'element') return;
+    if (elementDef.localName !== 'element') return;
 
     // Already enriched or already has an annotation node
     if ((elementDef as Element).getAttribute('data-annotation-enriched') === '1') return;
     for (let i = 0; i < elementDef.childNodes.length; i++) {
       const c = elementDef.childNodes[i];
-      if (c.nodeType === 1 && (c as Element).nodeName === ns + 'annotation') {
+      if (c.nodeType === 1 && (c as Element).localName === 'annotation') {
         // Has its own annotation structure already
         // Additionally ensure it has text; if empty, we still respect existing structure and don't override
         return;
@@ -865,11 +857,10 @@ export class Schema {
 
   // Locate the first xs:annotation element in the given node (direct child preferred, otherwise bounded DFS)
   private findFirstAnnotationElement(node: Element): Element | null {
-    const ns = 'xs:';
     // Prefer direct child annotation
     for (let i = 0; i < node.childNodes.length; i++) {
       const c = node.childNodes[i];
-      if (c.nodeType === 1 && (c as Element).nodeName === ns + 'annotation') {
+      if (c.nodeType === 1 && (c as Element).localName === 'annotation') {
         // Ensure documentation with some text exists inside
         const hasDocText = this.annotationElementHasText(c as Element);
         if (hasDocText) return c as Element;
@@ -884,7 +875,7 @@ export class Schema {
     const maxDepth = 4;
     while (stack.length) {
       const { el, depth } = stack.pop()!;
-      if (el.nodeName === ns + 'annotation' && this.annotationElementHasText(el)) {
+      if (el.localName === 'annotation' && this.annotationElementHasText(el)) {
         return el;
       }
       if (depth >= maxDepth) continue;
@@ -898,10 +889,9 @@ export class Schema {
 
   // Check if an xs:annotation element contains xs:documentation with non-empty text
   private annotationElementHasText(annotationEl: Element): boolean {
-    const ns = 'xs:';
     for (let i = 0; i < annotationEl.childNodes.length; i++) {
       const child = annotationEl.childNodes[i];
-      if (child.nodeType === 1 && (child as Element).nodeName === ns + 'documentation') {
+      if (child.nodeType === 1 && (child as Element).localName === 'documentation') {
         const docEl = child as Element;
         const text = (docEl.textContent || '').trim();
         if (text.length > 0) return true;
@@ -976,7 +966,6 @@ export class Schema {
   private findElementsInDefinition(parentDef: Element, elementName: string): Element[] {
     if (!parentDef) return [];
 
-    const ns = 'xs:';
     const results: Element[] = [];
     let maxSearchDepth = 0;
 
@@ -984,7 +973,7 @@ export class Schema {
     let typeNode = parentDef;
 
     // If parentDef is an element, get its type
-    if (parentDef.nodeName === ns + 'element') {
+    if (parentDef.localName === 'element') {
       const typeName = parentDef.getAttribute('type');
       if (typeName && this.schemaIndex.types[typeName]) {
         typeNode = this.schemaIndex.types[typeName];
@@ -992,7 +981,7 @@ export class Schema {
         // Look for inline complexType
         for (let i = 0; i < parentDef.childNodes.length; i++) {
           const child = parentDef.childNodes[i];
-          if (child.nodeType === 1 && (child as Element).nodeName === ns + 'complexType') {
+          if (child.nodeType === 1 && (child as Element).localName === 'complexType') {
             typeNode = child as Element;
             break;
           }
@@ -1018,7 +1007,7 @@ export class Schema {
       visited.add(node);
 
       // Check if this is the element we're looking for
-      if (node.nodeName === ns + 'element' && node.getAttribute('name') === elementName) {
+      if (node.localName === 'element' && node.getAttribute('name') === elementName) {
         results.push(node);
         return; // Don't recurse into found elements - early exit optimization
       }
@@ -1027,7 +1016,7 @@ export class Schema {
       if (results.length >= 3) return;
 
       // Handle type references and extensions
-      if (node.nodeName === ns + 'extension' && node.getAttribute('base')) {
+      if (node.localName === 'extension' && node.getAttribute('base')) {
         const baseName = node.getAttribute('base')!;
         const baseType = this.schemaIndex.types[baseName];
         if (baseType) {
@@ -1036,7 +1025,7 @@ export class Schema {
       }
 
       // Handle group references
-      if (node.nodeName === ns + 'group' && node.getAttribute('ref')) {
+      if (node.localName === 'group' && node.getAttribute('ref')) {
         const refName = node.getAttribute('ref')!;
         const groupDef = this.schemaIndex.groups[refName];
         if (groupDef) {
@@ -1045,13 +1034,13 @@ export class Schema {
       }
 
       // Handle structural elements - recurse into ALL children
-      if (node.nodeName === ns + 'sequence' ||
-        node.nodeName === ns + 'choice' ||
-        node.nodeName === ns + 'all' ||
-        node.nodeName === ns + 'complexType' ||
-        node.nodeName === ns + 'complexContent' ||
-        node.nodeName === ns + 'simpleContent' ||
-        node.nodeName === ns + 'group') {
+      if (node.localName === 'sequence' ||
+        node.localName === 'choice' ||
+        node.localName === 'all' ||
+        node.localName === 'complexType' ||
+        node.localName === 'complexContent' ||
+        node.localName === 'simpleContent' ||
+        node.localName === 'group') {
 
         // For structural nodes, recursively search all children
         for (let i = 0; i < node.childNodes.length; i++) {
@@ -1079,14 +1068,13 @@ export class Schema {
   private findAllElementsInDefinition(parentDef: Element): Element[] {
     if (!parentDef) return [];
 
-    const ns = 'xs:';
     const results: Element[] = [];
 
     // Get the actual type definition to search in
     let typeNode = parentDef;
 
     // If parentDef is an element, get its type
-    if (parentDef.nodeName === ns + 'element') {
+    if (parentDef.localName === 'element') {
       const typeName = parentDef.getAttribute('type');
       if (typeName && this.schemaIndex.types[typeName]) {
         typeNode = this.schemaIndex.types[typeName];
@@ -1094,7 +1082,7 @@ export class Schema {
         // Look for inline complexType
         for (let i = 0; i < parentDef.childNodes.length; i++) {
           const child = parentDef.childNodes[i];
-          if (child.nodeType === 1 && (child as Element).nodeName === ns + 'complexType') {
+          if (child.nodeType === 1 && (child as Element).localName === 'complexType') {
             typeNode = child as Element;
             break;
           }
@@ -1113,13 +1101,13 @@ export class Schema {
       visited.add(node);
 
       // If this is an element definition, add it to results
-      if (node.nodeName === ns + 'element' && node.getAttribute('name')) {
+      if (node.localName === 'element' && node.getAttribute('name')) {
         results.push(node);
         return; // Don't recurse into found elements - we only want immediate children
       }
 
       // Handle type references and extensions
-      if (node.nodeName === ns + 'extension' && node.getAttribute('base')) {
+      if (node.localName === 'extension' && node.getAttribute('base')) {
         const baseName = node.getAttribute('base')!;
         const baseType = this.schemaIndex.types[baseName];
         if (baseType) {
@@ -1128,7 +1116,7 @@ export class Schema {
       }
 
       // Handle group references
-      if (node.nodeName === ns + 'group' && node.getAttribute('ref')) {
+      if (node.localName === 'group' && node.getAttribute('ref')) {
         const refName = node.getAttribute('ref')!;
         const groupDef = this.schemaIndex.groups[refName];
         if (groupDef) {
@@ -1137,13 +1125,13 @@ export class Schema {
       }
 
       // Handle structural elements - recurse into ALL children
-      if (node.nodeName === ns + 'sequence' ||
-        node.nodeName === ns + 'choice' ||
-        node.nodeName === ns + 'all' ||
-        node.nodeName === ns + 'complexType' ||
-        node.nodeName === ns + 'complexContent' ||
-        node.nodeName === ns + 'simpleContent' ||
-        node.nodeName === ns + 'group') {
+      if (node.localName === 'sequence' ||
+        node.localName === 'choice' ||
+        node.localName === 'all' ||
+        node.localName === 'complexType' ||
+        node.localName === 'complexContent' ||
+        node.localName === 'simpleContent' ||
+        node.localName === 'group') {
 
         // For structural nodes, recursively search all children
         for (let i = 0; i < node.childNodes.length; i++) {
@@ -1241,17 +1229,15 @@ export class Schema {
   private collectAttrs(node: Element, attributes: Record<string, Element>, visited: Set<string> = new Set()): void {
     if (!node || node.nodeType !== 1) return;
 
-    const ns = 'xs:';
-
     // Use a unique key for types/groups to avoid infinite recursion
     let key: string | null = null;
-    if (node.nodeName === ns + 'complexType' && node.getAttribute('name')) {
+    if (node.localName === 'complexType' && node.getAttribute('name')) {
       key = 'type:' + node.getAttribute('name');
-    } else if (node.nodeName === ns + 'group' && node.getAttribute('name')) {
+    } else if (node.localName === 'group' && node.getAttribute('name')) {
       key = 'group:' + node.getAttribute('name');
-    } else if (node.nodeName === ns + 'attributeGroup' && node.getAttribute('name')) {
+    } else if (node.localName === 'attributeGroup' && node.getAttribute('name')) {
       key = 'attrgroup:' + node.getAttribute('name');
-    } else if (node.nodeName === ns + 'attributeGroup' && node.getAttribute('ref')) {
+    } else if (node.localName === 'attributeGroup' && node.getAttribute('ref')) {
       key = 'attrgroupref:' + node.getAttribute('ref');
     }
 
@@ -1259,19 +1245,19 @@ export class Schema {
     if (key) visited.add(key);
 
     // Handle different node types
-    if (node.nodeName === ns + 'attribute') {
+    if (node.localName === 'attribute') {
       const name = node.getAttribute('name');
       if (name) {
         attributes[name] = node;
       }
-    } else if (node.nodeName === ns + 'attributeGroup' && node.getAttribute('ref')) {
+    } else if (node.localName === 'attributeGroup' && node.getAttribute('ref')) {
       // Attribute group reference - resolve the reference
       const refName = node.getAttribute('ref')!;
       const group = this.schemaIndex.attributeGroups[refName];
       if (group) {
         this.collectAttrs(group, attributes, visited);
       }
-    } else if (node.nodeName === ns + 'attributeGroup' && node.getAttribute('name')) {
+    } else if (node.localName === 'attributeGroup' && node.getAttribute('name')) {
       // Named attribute group definition - process its children
       for (let i = 0; i < node.childNodes.length; i++) {
         const child = node.childNodes[i];
@@ -1279,7 +1265,7 @@ export class Schema {
           this.collectAttrs(child as Element, attributes, visited);
         }
       }
-    } else if (node.nodeName === ns + 'extension' && node.getAttribute('base')) {
+    } else if (node.localName === 'extension' && node.getAttribute('base')) {
       // Type extension - inherit from base and add own attributes
       const baseName = node.getAttribute('base')!;
       const base = this.schemaIndex.types[baseName];
@@ -1293,8 +1279,8 @@ export class Schema {
           this.collectAttrs(child as Element, attributes, visited);
         }
       }
-    } else if (node.nodeName === ns + 'complexContent' ||
-      node.nodeName === ns + 'simpleContent') {
+    } else if (node.localName === 'complexContent' ||
+      node.localName === 'simpleContent') {
       // Content wrapper - process children
       for (let i = 0; i < node.childNodes.length; i++) {
         const child = node.childNodes[i];
@@ -1302,14 +1288,14 @@ export class Schema {
           this.collectAttrs(child as Element, attributes, visited);
         }
       }
-    } else if (node.nodeName === ns + 'complexType' ||
-      node.nodeName === ns + 'sequence' ||
-      node.nodeName === ns + 'choice' ||
-      node.nodeName === ns + 'all') {
+    } else if (node.localName === 'complexType' ||
+      node.localName === 'sequence' ||
+      node.localName === 'choice' ||
+      node.localName === 'all') {
       // Structural nodes - traverse children but skip nested element definitions
       for (let i = 0; i < node.childNodes.length; i++) {
         const child = node.childNodes[i];
-        if (child.nodeType === 1 && (child as Element).nodeName !== ns + 'element') {
+        if (child.nodeType === 1 && (child as Element).localName !== 'element') {
           this.collectAttrs(child as Element, attributes, visited);
         }
       }
@@ -1324,7 +1310,7 @@ export class Schema {
     // Handle inline complexType
     for (let i = 0; i < node.childNodes.length; i++) {
       const child = node.childNodes[i];
-      if (child.nodeType === 1 && (child as Element).nodeName === ns + 'complexType') {
+      if (child.nodeType === 1 && (child as Element).localName === 'complexType') {
         this.collectAttrs(child as Element, attributes, visited);
         break;
       }
@@ -1380,8 +1366,6 @@ export class Schema {
     if (!typeNode) return {};
 
     const validationInfo: Partial<EnhancedAttributeInfo> = {};
-    const ns = 'xs:';
-
     const extractValidationRules = (node: Element): void => {
       if (!node || node.nodeType !== 1) return;
 
@@ -1389,7 +1373,7 @@ export class Schema {
       this.extractValidationRulesFromNode(node, validationInfo);
 
       // Handle inheritance: if this is a restriction with a base type, inherit from base
-      if (node.nodeName === ns + 'restriction') {
+      if (node.localName === 'restriction') {
         const baseType = node.getAttribute('base');
         if (baseType && baseType !== 'xs:string' && baseType.indexOf(':') === -1) {
           // This is a user-defined base type, not a built-in XSD type
@@ -1400,7 +1384,7 @@ export class Schema {
       }
 
       // Handle union types: collect validation info from all member types
-      if (node.nodeName === ns + 'union') {
+      if (node.localName === 'union') {
         const memberTypes = node.getAttribute('memberTypes');
         if (memberTypes) {
           // Split memberTypes by whitespace to get individual type names
@@ -1488,12 +1472,10 @@ export class Schema {
    */
   private getInlineTypeValidationInfo(attributeNode: Element): Partial<EnhancedAttributeInfo> {
     const validationInfo: Partial<EnhancedAttributeInfo> = {};
-    const ns = 'xs:';
-
     // Look for inline xs:simpleType definition within the attribute node
     for (let i = 0; i < attributeNode.childNodes.length; i++) {
       const child = attributeNode.childNodes[i];
-      if (child.nodeType === 1 && (child as Element).nodeName === ns + 'simpleType') {
+      if (child.nodeType === 1 && (child as Element).localName === 'simpleType') {
         const simpleTypeNode = child as Element;
 
         // Extract validation rules from the inline simpleType
@@ -1517,10 +1499,8 @@ export class Schema {
   private extractValidationRulesFromNode(node: Element, validationInfo: Partial<EnhancedAttributeInfo>): void {
     if (!node || node.nodeType !== 1) return;
 
-    const ns = 'xs:';
-
     // Extract enumeration values
-    if (node.nodeName === ns + 'enumeration') {
+    if (node.localName === 'enumeration') {
       const value = node.getAttribute('value');
       if (value) {
         if (!validationInfo.enumValues) validationInfo.enumValues = [];
@@ -1529,7 +1509,7 @@ export class Schema {
     }
 
     // Extract pattern restrictions
-    if (node.nodeName === ns + 'pattern') {
+    if (node.localName === 'pattern') {
       const pattern = node.getAttribute('value');
       if (pattern) {
         if (!validationInfo.patterns) validationInfo.patterns = [];
@@ -1538,14 +1518,14 @@ export class Schema {
     }
 
     // Extract length restrictions
-    if (node.nodeName === ns + 'minLength') {
+    if (node.localName === 'minLength') {
       const minLength = parseInt(node.getAttribute('value') || '0', 10);
       if (!isNaN(minLength)) {
         validationInfo.minLength = minLength;
       }
     }
 
-    if (node.nodeName === ns + 'maxLength') {
+    if (node.localName === 'maxLength') {
       const maxLength = parseInt(node.getAttribute('value') || '0', 10);
       if (!isNaN(maxLength)) {
         validationInfo.maxLength = maxLength;
@@ -1553,28 +1533,28 @@ export class Schema {
     }
 
     // Extract numeric range restrictions
-    if (node.nodeName === ns + 'minInclusive') {
+    if (node.localName === 'minInclusive') {
       const minInclusive = parseFloat(node.getAttribute('value') || '0');
       if (!isNaN(minInclusive)) {
         validationInfo.minInclusive = minInclusive;
       }
     }
 
-    if (node.nodeName === ns + 'maxInclusive') {
+    if (node.localName === 'maxInclusive') {
       const maxInclusive = parseFloat(node.getAttribute('value') || '0');
       if (!isNaN(maxInclusive)) {
         validationInfo.maxInclusive = maxInclusive;
       }
     }
 
-    if (node.nodeName === ns + 'minExclusive') {
+    if (node.localName === 'minExclusive') {
       const minExclusive = parseFloat(node.getAttribute('value') || '0');
       if (!isNaN(minExclusive)) {
         validationInfo.minExclusive = minExclusive;
       }
     }
 
-    if (node.nodeName === ns + 'maxExclusive') {
+    if (node.localName === 'maxExclusive') {
       const maxExclusive = parseFloat(node.getAttribute('value') || '0');
       if (!isNaN(maxExclusive)) {
         validationInfo.maxExclusive = maxExclusive;
@@ -1862,8 +1842,7 @@ export class Schema {
     }
 
     // Look for restriction base
-    const ns = 'xs:';
-    const restrictions = this.findChildElements(typeNode, ns + 'restriction');
+    const restrictions = this.findChildElements(typeNode, 'restriction');
 
     if (restrictions.length > 0) {
       const baseType = restrictions[0].getAttribute('base');
@@ -1874,7 +1853,7 @@ export class Schema {
     }
 
     // Look for extension base
-    const extensions = this.findChildElements(typeNode, ns + 'extension');
+    const extensions = this.findChildElements(typeNode, 'extension');
     if (extensions.length > 0) {
       const baseType = extensions[0].getAttribute('base');
       if (baseType) {
@@ -1884,7 +1863,7 @@ export class Schema {
     }
 
     // Look for union types
-    const unions = this.findChildElements(typeNode, ns + 'union');
+    const unions = this.findChildElements(typeNode, 'union');
     if (unions.length > 0) {
       const memberTypes = unions[0].getAttribute('memberTypes');
       if (memberTypes) {
@@ -1925,7 +1904,7 @@ export class Schema {
     const results: Element[] = [];
 
     const searchInNode = (node: Element): void => {
-      if (node.nodeName === elementName) {
+      if (node.localName === elementName) {
         results.push(node);
         return; // Don't recurse into found elements
       }
@@ -2024,8 +2003,6 @@ export class Schema {
     types: Record<string, Element>
   ): Record<string, string[]> {
     const typeToElements: Record<string, string[]> = {};
-    const ns = 'xs:';
-
     // Scan all global elements to find which types they use
     for (const [elementName, elements] of Object.entries(globalElements)) {
       for (const element of elements) {
@@ -2038,13 +2015,13 @@ export class Schema {
         }
 
         // Also scan inline elements within this global element
-        this.scanElementForInlineTypeReferences(element, typeToElements, ns);
+        this.scanElementForInlineTypeReferences(element, typeToElements);
       }
     }
 
     // Also scan type definitions for nested type references
     for (const [typeName, typeElement] of Object.entries(types)) {
-      this.scanTypeForTypeReferences(typeElement, typeName, typeToElements, ns);
+      this.scanTypeForTypeReferences(typeElement, typeName, typeToElements);
     }
 
     return typeToElements;
@@ -2061,12 +2038,11 @@ export class Schema {
     node: Element,
     parentContext: string,
     typeToElements: Record<string, string[]>,
-    ns: string
   ): void {
     if (!node || node.nodeType !== 1) return;
 
     // Look for elements with type attributes
-    if (node.nodeName === ns + 'element') {
+    if (node.localName === 'element') {
       const typeAttr = node.getAttribute('type');
       if (typeAttr) {
         if (!typeToElements[typeAttr]) typeToElements[typeAttr] = [];
@@ -2077,7 +2053,7 @@ export class Schema {
     }
 
     // Look for extension/restriction base attributes
-    if ((node.nodeName === ns + 'extension' || node.nodeName === ns + 'restriction')) {
+    if ((node.localName === 'extension' || node.localName === 'restriction')) {
       const baseAttr = node.getAttribute('base');
       if (baseAttr) {
         if (!typeToElements[baseAttr]) typeToElements[baseAttr] = [];
@@ -2091,7 +2067,7 @@ export class Schema {
     for (let i = 0; i < node.childNodes.length; i++) {
       const child = node.childNodes[i];
       if (child.nodeType === 1) {
-        this.scanTypeForTypeReferences(child as Element, parentContext, typeToElements, ns);
+        this.scanTypeForTypeReferences(child as Element, parentContext, typeToElements);
       }
     }
   }
@@ -2105,7 +2081,6 @@ export class Schema {
   private scanElementForInlineTypeReferences(
     element: Element,
     typeToElements: Record<string, string[]>,
-    ns: string
   ): void {
     if (!element || element.nodeType !== 1) return;
 
@@ -2116,7 +2091,7 @@ export class Schema {
         const childElement = child as Element;
 
         // If this is an inline element with a type attribute
-        if (childElement.nodeName === ns + 'element') {
+        if (childElement.localName === 'element') {
           const elementName = childElement.getAttribute('name');
           const typeAttr = childElement.getAttribute('type');
 
@@ -2129,7 +2104,7 @@ export class Schema {
         }
 
         // Recursively scan child elements
-        this.scanElementForInlineTypeReferences(childElement, typeToElements, ns);
+        this.scanElementForInlineTypeReferences(childElement, typeToElements);
       }
     }
   }
@@ -2219,18 +2194,16 @@ export class Schema {
    * Extract annotation text from an XSD element's xs:annotation/xs:documentation
    */
   public static extractAnnotationText(element: Element): string | undefined {
-    const ns = 'xs:';
-
     // Look for xs:annotation child element
     for (let i = 0; i < element.childNodes.length; i++) {
       const child = element.childNodes[i];
-      if (child.nodeType === 1 && (child as Element).nodeName === ns + 'annotation') {
+      if (child.nodeType === 1 && (child as Element).localName === 'annotation') {
         const annotationElement = child as Element;
 
         // Look for xs:documentation within xs:annotation
         for (let j = 0; j < annotationElement.childNodes.length; j++) {
           const docChild = annotationElement.childNodes[j];
-          if (docChild.nodeType === 1 && (docChild as Element).nodeName === ns + 'documentation') {
+          if (docChild.nodeType === 1 && (docChild as Element).localName === 'documentation') {
             const docElement = docChild as Element;
 
             // Get the text content
@@ -2253,13 +2226,11 @@ export class Schema {
    */
   private extractEnumValueAnnotations(typeNode: Element): Map<string, string> {
     const annotations = new Map<string, string>();
-    const ns = 'xs:';
-
     const extractFromNode = (node: Element): void => {
       if (!node || node.nodeType !== 1) return;
 
       // Check if this is an enumeration element
-      if (node.nodeName === ns + 'enumeration') {
+      if (node.localName === 'enumeration') {
         const value = node.getAttribute('value');
         if (value) {
           const annotationText = Schema.extractAnnotationText(node);
@@ -2335,12 +2306,12 @@ export class Schema {
       const tFilter0 = (globalThis.performance?.now?.() ?? Date.now());
       const contentModel = this.getCachedContentModel(elementDef);
       if (contentModel) {
-        const modelType = contentModel.nodeName;
-        if (modelType === 'xs:choice') {
+        const modelType = contentModel.localName;
+        if (modelType === 'choice') {
           filteredElements = this.getElementsInChoice(contentModel, childElements);
-        } else if (modelType === 'xs:sequence') {
+        } else if (modelType === 'sequence') {
           filteredElements = this.getStartElementsOfSequence(contentModel, childElements);
-        } else if (modelType === 'xs:all') {
+        } else if (modelType === 'all') {
           // For xs:all, any element can start
           filteredElements = childElements;
         } else {
@@ -2422,16 +2393,16 @@ export class Schema {
     const prevSibling = allChildren.find(el => el.getAttribute('name') === previousSibling);
     if (!previousSibling || !prevSibling) {
       if (!contentModel) { byChild.set(elementName, true); return true; }
-      const modelType = contentModel.nodeName;
-      if (modelType === 'xs:all') { byChild.set(elementName, true); return true; }
-      if (modelType === 'xs:choice') {
+      const modelType = contentModel.localName;
+      if (modelType === 'all') { byChild.set(elementName, true); return true; }
+      if (modelType === 'choice') {
         // Check if the candidate can start any alternative in the choice
         const startSet = this.getModelStartSet(contentModel, allChildren);
         const ok = startSet.has(elementName);
         byChild.set(elementName, ok);
         return ok;
       }
-      if (modelType === 'xs:sequence') {
+      if (modelType === 'sequence') {
         // Check if the candidate can start the sequence (respecting minOccurs chain)
         const startSet = this.getModelStartSet(contentModel, allChildren);
         const ok = startSet.has(elementName);
@@ -2445,7 +2416,7 @@ export class Schema {
 
     // There is a previous sibling; handle ordering constraints efficiently by filtering only the candidate
     if (!contentModel) { byChild.set(elementName, true); return true; }
-    if (contentModel.nodeName === 'xs:all') { byChild.set(elementName, true); return true; }
+    if (contentModel.localName === 'all') { byChild.set(elementName, true); return true; }
     // Use cached next-name set for this content model and previous sibling
     const nextSet = this.getModelNextSet(contentModel, previousSibling, prevSibling, allChildren);
     const ok = nextSet.has(elementName);
@@ -2457,11 +2428,10 @@ export class Schema {
   private getModelStartSet(model: Element, allChildren: Element[]): Set<string> {
     let cached = this.cache.modelStartNamesCache!.get(model);
     if (cached) return cached;
-    const ns = 'xs:';
     let starters: Element[] = [];
-    if (model.nodeName === ns + 'choice' || model.nodeName === ns + 'all') {
+    if (model.localName === 'choice' || model.localName === 'all') {
       starters = this.getElementsInChoice(model, allChildren);
-    } else if (model.nodeName === ns + 'sequence') {
+    } else if (model.localName === 'sequence') {
       starters = this.getStartElementsOfSequence(model, allChildren);
     } else {
       // Fallback: allow any declared children to start
@@ -2514,15 +2484,13 @@ export class Schema {
    * @returns The content model element, or null if not found
    */
   private findContentModel(elementDef: Element): Element | null {
-    const ns = 'xs:';
-
     // If the node itself is already a content model, return it
-    if (elementDef.nodeName === ns + 'sequence' || elementDef.nodeName === ns + 'choice' || elementDef.nodeName === ns + 'all') {
+    if (elementDef.localName === 'sequence' || elementDef.localName === 'choice' || elementDef.localName === 'all') {
       return elementDef;
     }
 
     // If the node is a group (definition or ref), resolve to its direct content model
-    if (elementDef.nodeName === ns + 'group') {
+    if (elementDef.localName === 'group') {
       const ref = elementDef.getAttribute('ref');
       const groupNode = ref ? this.schemaIndex.groups[ref] : elementDef;
       if (groupNode) {
@@ -2532,11 +2500,11 @@ export class Schema {
     }
 
     // If this is a complexType or content extension/restriction, find direct content model
-    if (elementDef.nodeName === ns + 'complexType' ||
-      elementDef.nodeName === ns + 'complexContent' ||
-      elementDef.nodeName === ns + 'simpleContent' ||
-      elementDef.nodeName === ns + 'extension' ||
-      elementDef.nodeName === ns + 'restriction') {
+    if (elementDef.localName === 'complexType' ||
+      elementDef.localName === 'complexContent' ||
+      elementDef.localName === 'simpleContent' ||
+      elementDef.localName === 'extension' ||
+      elementDef.localName === 'restriction') {
       const direct = this.findDirectContentModel(elementDef);
       if (direct) return direct;
     }
@@ -2544,7 +2512,7 @@ export class Schema {
     // Look for complexType first
     for (let i = 0; i < elementDef.childNodes.length; i++) {
       const child = elementDef.childNodes[i];
-      if (child.nodeType === 1 && (child as Element).nodeName === ns + 'complexType') {
+      if (child.nodeType === 1 && (child as Element).localName === 'complexType') {
         const complexType = child as Element;
 
         // Direct sequence/choice/all in complexType
@@ -2611,22 +2579,20 @@ export class Schema {
    * @returns The content model element, or null if not found
    */
   private findDirectContentModel(parent: Element): Element | null {
-    const ns = 'xs:';
-
     for (let i = 0; i < parent.childNodes.length; i++) {
       const child = parent.childNodes[i];
       if (child.nodeType === 1) {
         const element = child as Element;
 
         // Direct sequence/choice/all
-        if (element.nodeName === ns + 'sequence' ||
-          element.nodeName === ns + 'choice' ||
-          element.nodeName === ns + 'all') {
+        if (element.localName === 'sequence' ||
+          element.localName === 'choice' ||
+          element.localName === 'all') {
           return element;
         }
 
         // Look in extension/restriction
-        if (element.nodeName === ns + 'extension' || element.nodeName === ns + 'restriction') {
+        if (element.localName === 'extension' || element.localName === 'restriction') {
           const nested = this.findDirectContentModel(element);
           if (nested) {
             return nested;
@@ -2634,7 +2600,7 @@ export class Schema {
         }
 
         // Follow group references to find underlying content model
-        if (element.nodeName === ns + 'group') {
+        if (element.localName === 'group') {
           const ref = element.getAttribute('ref');
           if (ref) {
             const groupDef = this.schemaIndex.groups[ref];
@@ -2660,14 +2626,14 @@ export class Schema {
    * @returns Filtered elements that are valid as next elements
    */
   private getValidNextElementsInContentModel(contentModel: Element, previousSibling: Element, allChildren: Element[]): Element[] {
-    const modelType = contentModel.nodeName;
+    const modelType = contentModel.localName;
 
-    if (modelType === 'xs:choice') {
+    if (modelType === 'choice') {
       return this.getValidNextInChoice(contentModel, previousSibling, allChildren);
-    } else if (modelType === 'xs:sequence') {
+    } else if (modelType === 'sequence') {
       return this.getValidNextInSequence(contentModel, previousSibling, allChildren);
-    } else if (modelType === 'xs:all') {
-      // For xs:all, any unused element can come next
+    } else if (modelType === 'all') {
+      // For all, any unused element can come next
       return allChildren; // Simplified - could be enhanced to track used elements
     }
 
@@ -2687,33 +2653,32 @@ export class Schema {
     // continue inside that same sequence arm and also allow restarting that arm (choice repetition).
     // IMPORTANT: Prefer scanning the direct alternatives of this choice first to avoid
     // accidentally picking outer sequences (e.g., the actions sequence) that contain the element indirectly.
-    const ns = 'xs:';
     let nestedSeq: Element | null = null;
     for (let i = 0; i < choice.childNodes.length && !nestedSeq; i++) {
       const alt = choice.childNodes[i];
       if (alt.nodeType !== 1) continue;
       const el = alt as Element;
-      if (el.nodeName === ns + 'sequence') {
+      if (el.localName === 'sequence') {
         if (this.itemContainsElement(el, previousSibling)) {
           nestedSeq = el;
           break;
         }
-      } else if (el.nodeName === ns + 'group') {
+      } else if (el.localName === 'group') {
         const ref = el.getAttribute('ref');
         const grp = ref ? this.schemaIndex.groups[ref] : el;
         if (grp) {
           const model = this.findDirectContentModel(grp);
-          if (model && model.nodeName === ns + 'choice') {
+          if (model && model.localName === 'choice') {
             for (let j = 0; j < model.childNodes.length && !nestedSeq; j++) {
               const mchild = model.childNodes[j];
               if (mchild.nodeType !== 1) continue;
               const mEl = mchild as Element;
-              if (mEl.nodeName === ns + 'sequence' && this.itemContainsElement(mEl, previousSibling)) {
+              if (mEl.localName === 'sequence' && this.itemContainsElement(mEl, previousSibling)) {
                 nestedSeq = mEl;
                 break;
               }
             }
-          } else if (model && model.nodeName === ns + 'sequence' && this.itemContainsElement(model, previousSibling)) {
+          } else if (model && model.localName === 'sequence' && this.itemContainsElement(model, previousSibling)) {
             nestedSeq = model;
             break;
           }
@@ -2726,13 +2691,12 @@ export class Schema {
     }
     if (nestedSeq) {
       // Build a list of direct element items in the nested sequence along with occurs
-      const ns = 'xs:';
       const items: { name: string; minOccurs: number; maxOccurs: number | 'unbounded' }[] = [];
       for (let i = 0; i < nestedSeq.childNodes.length; i++) {
         const child = nestedSeq.childNodes[i];
         if (child.nodeType !== 1) continue;
         const el = child as Element;
-        if (el.nodeName === ns + 'element') {
+        if (el.localName === 'element') {
           const name = el.getAttribute('name');
           if (!name) continue;
           const minOccurs = this.getEffectiveMinOccurs(el, nestedSeq);
@@ -2822,35 +2786,34 @@ export class Schema {
     // Track non-start elements from sequence alternatives to avoid leaking them when not inside that sequence arm.
     let prevChoiceNonStart: Set<string> | null = null;
     let nestedChoiceAllowedNames: Set<string> | null = null;
-    if (previousItem && previousItem.nodeName === 'xs:choice') {
+    if (previousItem && previousItem.localName === 'choice') {
       // Prefer direct alternative scan first
-      const ns = 'xs:';
       let nestedSeq: Element | null = null;
       for (let i = 0; i < previousItem.childNodes.length && !nestedSeq; i++) {
         const alt = previousItem.childNodes[i];
         if (alt.nodeType !== 1) continue;
         const el = alt as Element;
-        if (el.nodeName === ns + 'sequence') {
+        if (el.localName === 'sequence') {
           if (this.itemContainsElement(el, previousSibling)) {
             nestedSeq = el;
             break;
           }
-        } else if (el.nodeName === ns + 'group') {
+        } else if (el.localName === 'group') {
           const ref = el.getAttribute('ref');
           const grp2 = ref ? this.schemaIndex.groups[ref] : el;
           if (grp2) {
             const model2 = this.findDirectContentModel(grp2);
-            if (model2 && model2.nodeName === ns + 'choice') {
+            if (model2 && model2.localName === 'choice') {
               for (let j = 0; j < model2.childNodes.length && !nestedSeq; j++) {
                 const mchild = model2.childNodes[j];
                 if (mchild.nodeType !== 1) continue;
                 const mEl = mchild as Element;
-                if (mEl.nodeName === ns + 'sequence' && this.itemContainsElement(mEl, previousSibling)) {
+                if (mEl.localName === 'sequence' && this.itemContainsElement(mEl, previousSibling)) {
                   nestedSeq = mEl;
                   break;
                 }
               }
-            } else if (model2 && model2.nodeName === ns + 'sequence' && this.itemContainsElement(model2, previousSibling)) {
+            } else if (model2 && model2.localName === 'sequence' && this.itemContainsElement(model2, previousSibling)) {
               nestedSeq = model2;
               break;
             }
@@ -2863,13 +2826,12 @@ export class Schema {
       }
       if (nestedSeq) {
         // Non-recursive computation for the nested sequence arm containing previousSibling
-        const ns = 'xs:';
         const items: { name: string; minOccurs: number; maxOccurs: number | 'unbounded' }[] = [];
         for (let i = 0; i < nestedSeq.childNodes.length; i++) {
           const child = nestedSeq.childNodes[i];
           if (child.nodeType !== 1) continue;
           const el = child as Element;
-          if (el.nodeName === ns + 'element') {
+          if (el.localName === 'element') {
             const name = el.getAttribute('name');
             if (!name) continue;
             const minOccurs = this.getEffectiveMinOccurs(el, nestedSeq);
@@ -2919,41 +2881,40 @@ export class Schema {
     }
 
     // If the previous item is a group, resolve its underlying model and delegate accordingly
-    if (previousItem && previousItem.nodeName === 'xs:group') {
-      const ns = 'xs:';
+    if (previousItem && previousItem.localName === 'group') {
       const ref = previousItem.getAttribute('ref');
       const grp = ref ? this.schemaIndex.groups[ref] : previousItem;
       if (grp) {
         const model = this.findDirectContentModel(grp);
         if (model) {
-          if (model.nodeName === ns + 'choice') {
+          if (model.localName === 'choice') {
             // Prefer direct alternative scan first inside the resolved choice
             let nestedSeq: Element | null = null;
             for (let i = 0; i < model.childNodes.length && !nestedSeq; i++) {
               const alt = model.childNodes[i];
               if (alt.nodeType !== 1) continue;
               const el = alt as Element;
-              if (el.nodeName === ns + 'sequence') {
+              if (el.localName === 'sequence') {
                 if (this.itemContainsElement(el, previousSibling)) {
                   nestedSeq = el;
                   break;
                 }
-              } else if (el.nodeName === ns + 'group') {
+              } else if (el.localName === 'group') {
                 const ref = el.getAttribute('ref');
                 const grp2 = ref ? this.schemaIndex.groups[ref] : el;
                 if (grp2) {
                   const model2 = this.findDirectContentModel(grp2);
-                  if (model2 && model2.nodeName === ns + 'choice') {
+                  if (model2 && model2.localName === 'choice') {
                     for (let j = 0; j < model2.childNodes.length && !nestedSeq; j++) {
                       const mchild = model2.childNodes[j];
                       if (mchild.nodeType !== 1) continue;
                       const mEl = mchild as Element;
-                      if (mEl.nodeName === ns + 'sequence' && this.itemContainsElement(mEl, previousSibling)) {
+                      if (mEl.localName === 'sequence' && this.itemContainsElement(mEl, previousSibling)) {
                         nestedSeq = mEl;
                         break;
                       }
                     }
-                  } else if (model2 && model2.nodeName === ns + 'sequence' && this.itemContainsElement(model2, previousSibling)) {
+                  } else if (model2 && model2.localName === 'sequence' && this.itemContainsElement(model2, previousSibling)) {
                     nestedSeq = model2;
                     break;
                   }
@@ -2970,7 +2931,7 @@ export class Schema {
                 const child = nestedSeq.childNodes[i];
                 if (child.nodeType !== 1) continue;
                 const el = child as Element;
-                if (el.nodeName === ns + 'element') {
+                if (el.localName === 'element') {
                   const name = el.getAttribute('name');
                   if (!name) continue;
                   const minOccurs = this.getEffectiveMinOccurs(el, nestedSeq);
@@ -3000,10 +2961,10 @@ export class Schema {
                 if (el) validNext.push(el);
               }
             }
-          } else if (model.nodeName === ns + 'sequence') {
+          } else if (model.localName === 'sequence') {
             const seqNext = this.getValidNextInSequence(model, previousSibling, allChildren, true);
             validNext.push(...seqNext);
-          } else if (model.nodeName === ns + 'all') {
+          } else if (model.localName === 'all') {
             // xs:all has no ordering; allow allChildren
             validNext.push(...allChildren);
           }
@@ -3018,26 +2979,25 @@ export class Schema {
       const prevMaxOccurs = this.getEffectiveMaxOccurs(previousItem, sequence);
       const prevCanRepeat = (prevMaxOccurs === 'unbounded') || (typeof prevMaxOccurs === 'number' && prevMaxOccurs > 1);
       if (prevCanRepeat) {
-        const ns = 'xs:';
-        if (previousItem.nodeName === ns + 'choice') {
+        if (previousItem.localName === 'choice') {
           // Repeating a choice: allow all alternatives that can start a new occurrence
           validNext.push(...this.getElementsInChoice(previousItem, allChildren));
-        } else if (previousItem.nodeName === ns + 'group') {
+        } else if (previousItem.localName === 'group') {
           // Repeating a group: respect its underlying model
           const ref = previousItem.getAttribute('ref');
           const grp = ref ? this.schemaIndex.groups[ref] : previousItem;
           if (grp) {
             const model = this.findDirectContentModel(grp);
-            if (model && model.nodeName === ns + 'choice') {
+            if (model && model.localName === 'choice') {
               validNext.push(...this.getElementsInChoice(model, allChildren));
-            } else if (model && model.nodeName === ns + 'sequence') {
+            } else if (model && model.localName === 'sequence') {
               validNext.push(...this.getStartElementsOfSequence(model, allChildren));
             } else {
               const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSiblingName);
               if (repeatElement) validNext.push(repeatElement);
             }
           }
-        } else if (previousItem.nodeName === ns + 'sequence') {
+        } else if (previousItem.localName === 'sequence') {
           // Repeating a sequence item directly: allow its starts
           validNext.push(...this.getStartElementsOfSequence(previousItem, allChildren));
         } else {
@@ -3084,7 +3044,7 @@ export class Schema {
     // Do not fall back to other alternatives of the same choice here; that would allow do_elseif/do_else after unrelated items like do_all
 
     // When previous item is a choice, avoid leaking non-start elements of its sequence alternatives
-    if (previousItem && previousItem.nodeName === 'xs:choice' && prevChoiceNonStart && prevChoiceNonStart.size > 0) {
+    if (previousItem && previousItem.localName === 'choice' && prevChoiceNonStart && prevChoiceNonStart.size > 0) {
       const filtered = validNext.filter(e => {
         const name = e.getAttribute('name') || '';
         if (!name) return false;
@@ -3116,17 +3076,16 @@ export class Schema {
    * items like do_elseif/do_else when not continuing inside that sequence arm.
    */
   private getNonStartElementsInChoiceSequences(choice: Element): Set<string> {
-    const ns = 'xs:';
     const names = new Set<string>();
 
     const collectFromNode = (node: Element) => {
-      if (node.nodeName === ns + 'sequence') {
+      if (node.localName === 'sequence') {
         let seenFirst = false;
         for (let i = 0; i < node.childNodes.length; i++) {
           const child = node.childNodes[i];
           if (child.nodeType !== 1) continue;
           const el = child as Element;
-          if (el.nodeName === ns + 'element') {
+          if (el.localName === 'element') {
             const nm = el.getAttribute('name');
             if (!nm) continue;
             if (seenFirst) {
@@ -3134,26 +3093,26 @@ export class Schema {
             } else {
               seenFirst = true;
             }
-          } else if (el.nodeName === ns + 'group') {
+          } else if (el.localName === 'group') {
             const ref = el.getAttribute('ref');
             const grp = ref ? this.schemaIndex.groups[ref] : el;
             if (grp) {
               const model = this.findDirectContentModel(grp);
               if (model) collectFromNode(model);
             }
-          } else if (el.nodeName === ns + 'choice' || el.nodeName === ns + 'sequence') {
+          } else if (el.localName === 'choice' || el.localName === 'sequence') {
             // Dive into nested structures if present
             collectFromNode(el);
           }
         }
-      } else if (node.nodeName === ns + 'group') {
+      } else if (node.localName === 'group') {
         const ref = node.getAttribute('ref');
         const grp = ref ? this.schemaIndex.groups[ref] : node;
         if (grp) {
           const model = this.findDirectContentModel(grp);
           if (model) collectFromNode(model);
         }
-      } else if (node.nodeName === ns + 'choice') {
+      } else if (node.localName === 'choice') {
         for (let i = 0; i < node.childNodes.length; i++) {
           const child = node.childNodes[i];
           if (child.nodeType === 1) collectFromNode(child as Element);
@@ -3177,16 +3136,15 @@ export class Schema {
    * @returns True if the item contains the element
    */
   private itemContainsElement(item: Element, element: Element, visited?: Set<Element>): boolean {
-    const ns = 'xs:';
     // Initialize visited set for cycle detection across recursive traversals
     if (!visited) visited = new Set<Element>();
 
-    if (item.nodeName === ns + 'element') {
+    if (item.localName === 'element') {
       return item === element;
-    } else if (item.nodeName === ns + 'choice') {
+    } else if (item.localName === 'choice') {
       // Check if any element in the choice matches
       return this.choiceContainsElement(item, element, visited);
-    } else if (item.nodeName === ns + 'sequence') {
+    } else if (item.localName === 'sequence') {
       if (visited.has(item)) return false;
       visited.add(item);
       // Check any child of the sequence
@@ -3199,7 +3157,7 @@ export class Schema {
         }
       }
       return false;
-    } else if (item.nodeName === ns + 'group') {
+    } else if (item.localName === 'group') {
       if (visited.has(item)) return false;
       visited.add(item);
       // Check if the group contains the element (resolve ref or definition)
@@ -3220,7 +3178,6 @@ export class Schema {
    * Find a nested sequence within a choice that contains the specified element
    */
   private findNestedSequenceContainingElement(root: Element, elementItem: Element): Element | null {
-    const ns = 'xs:';
     const stack: Element[] = [root];
     const visited = new Set<Element>();
     let steps = 0;
@@ -3232,14 +3189,14 @@ export class Schema {
       visited.add(node);
 
       // If this is a group, resolve to its model and traverse that instead of raw children
-      if (node.nodeName === ns + 'group') {
+      if (node.localName === 'group') {
         const ref = node.getAttribute('ref');
         const grp = ref ? this.schemaIndex.groups[ref] : node;
         if (grp) {
           const model = this.findDirectContentModel(grp);
           if (model) {
             // If resolved model is a sequence that contains the element, return it
-            if (model.nodeName === ns + 'sequence' && this.itemContainsElement(model, elementItem)) {
+            if (model.localName === 'sequence' && this.itemContainsElement(model, elementItem)) {
               return model;
             }
             // Otherwise, continue traversal within the resolved model
@@ -3250,7 +3207,7 @@ export class Schema {
       }
 
       // Direct sequence detection
-      if (node.nodeName === ns + 'sequence' && this.itemContainsElement(node, elementItem)) {
+      if (node.localName === 'sequence' && this.itemContainsElement(node, elementItem)) {
         return node;
       }
 
@@ -3273,7 +3230,6 @@ export class Schema {
    * @returns True if the choice contains the element
    */
   private choiceContainsElement(choice: Element, elementItem: Element, visited?: Set<Element>): boolean {
-    const ns = 'xs:';
     // Initialize visited set for cycle detection across recursive traversals
     if (!visited) visited = new Set<Element>();
     if (visited.has(choice)) return false;
@@ -3284,19 +3240,19 @@ export class Schema {
       if (child.nodeType === 1) {
         const element = child as Element;
 
-        if (element.nodeName === ns + 'element' && element === elementItem) {
+        if (element.localName === 'element' && element === elementItem) {
           return true;
-        } else if (element.nodeName === ns + 'choice') {
+        } else if (element.localName === 'choice') {
           if (this.choiceContainsElement(element, elementItem, visited)) {
             return true;
           }
-        } else if (element.nodeName === ns + 'sequence') {
+        } else if (element.localName === 'sequence') {
           // A sequence can be an alternative in a choice (e.g., do_if/do_elseif/do_else)
           // Delegate to generic itemContainsElement to search within the sequence
           if (this.itemContainsElement(element, elementItem, visited)) {
             return true;
           }
-        } else if (element.nodeName === ns + 'group') {
+        } else if (element.localName === 'group') {
           const groupName = element.getAttribute('ref');
           const grp = groupName ? this.schemaIndex.groups[groupName] : element;
           if (grp) {
@@ -3319,30 +3275,28 @@ export class Schema {
    * @returns Array of elements from the item
    */
   private getElementsFromSequenceItem(item: Element, allChildren: Element[]): Element[] {
-    const ns = 'xs:';
-
-    if (item.nodeName === ns + 'element') {
+    if (item.localName === 'element') {
       const elementName = item.getAttribute('name');
       if (elementName) {
         const element = allChildren.find(elem => elem.getAttribute('name') === elementName);
         return element ? [element] : [];
       }
-    } else if (item.nodeName === ns + 'choice') {
+    } else if (item.localName === 'choice') {
       return this.getElementsInChoice(item, allChildren);
-    } else if (item.nodeName === ns + 'sequence') {
+    } else if (item.localName === 'sequence') {
       // When asked generically, return only the start-capable elements of this sequence
       return this.getStartElementsOfSequence(item, allChildren);
-    } else if (item.nodeName === ns + 'group') {
+    } else if (item.localName === 'group') {
       const groupName = item.getAttribute('ref');
       const grp = groupName ? this.schemaIndex.groups[groupName] : item;
       if (grp) {
         const model = this.findDirectContentModel(grp);
         if (model) {
-          if (model.nodeName === ns + 'choice') {
+          if (model.localName === 'choice') {
             return this.getElementsInChoice(model, allChildren);
-          } else if (model.nodeName === ns + 'sequence') {
+          } else if (model.localName === 'sequence') {
             return this.getStartElementsOfSequence(model, allChildren);
-          } else if (model.nodeName === ns + 'all') {
+          } else if (model.localName === 'all') {
             const results: Element[] = [];
             for (let j = 0; j < model.childNodes.length; j++) {
               const allChild = model.childNodes[j];
@@ -3366,7 +3320,6 @@ export class Schema {
    * @returns Array of elements that are options in the choice
    */
   private getElementsInChoice(choice: Element, allChildren: Element[]): Element[] {
-    const ns = 'xs:';
     const choiceElements: Element[] = [];
 
     for (let i = 0; i < choice.childNodes.length; i++) {
@@ -3374,7 +3327,7 @@ export class Schema {
       if (child.nodeType === 1) {
         const element = child as Element;
 
-        if (element.nodeName === ns + 'element') {
+        if (element.localName === 'element') {
           const elementName = element.getAttribute('name');
           if (elementName) {
             const foundElement = allChildren.find(elem => elem.getAttribute('name') === elementName);
@@ -3382,24 +3335,24 @@ export class Schema {
               choiceElements.push(foundElement);
             }
           }
-        } else if (element.nodeName === ns + 'choice') {
+        } else if (element.localName === 'choice') {
           // Nested choice: include only its start-capable options
           choiceElements.push(...this.getElementsInChoice(element, allChildren));
-        } else if (element.nodeName === ns + 'sequence') {
+        } else if (element.localName === 'sequence') {
           // Sequence within choice: only include elements that can start that sequence (not follow-up-only items)
           choiceElements.push(...this.getStartElementsOfSequence(element, allChildren));
-        } else if (element.nodeName === ns + 'group') {
+        } else if (element.localName === 'group') {
           // Resolve group (ref or definition) to its direct content model and include start-capable options
           const groupName = element.getAttribute('ref');
           const grp = groupName ? this.schemaIndex.groups[groupName] : element;
           if (grp) {
             const model = this.findDirectContentModel(grp);
             if (model) {
-              if (model.nodeName === ns + 'choice') {
+              if (model.localName === 'choice') {
                 choiceElements.push(...this.getElementsInChoice(model, allChildren));
-              } else if (model.nodeName === ns + 'sequence') {
+              } else if (model.localName === 'sequence') {
                 choiceElements.push(...this.getStartElementsOfSequence(model, allChildren));
-              } else if (model.nodeName === ns + 'all') {
+              } else if (model.localName === 'all') {
                 for (let j = 0; j < model.childNodes.length; j++) {
                   const allChild = model.childNodes[j];
                   if (allChild.nodeType === 1) {
@@ -3420,7 +3373,6 @@ export class Schema {
    * Get the set of elements that can legally start the provided sequence, honoring minOccurs on leading items.
    */
   private getStartElementsOfSequence(seq: Element, allChildren: Element[]): Element[] {
-    const ns = 'xs:';
     const results: Element[] = [];
     for (let i = 0; i < seq.childNodes.length; i++) {
       const child = seq.childNodes[i];
@@ -3447,30 +3399,29 @@ export class Schema {
    * Return the elements that can appear at the start position of a sequence item.
    */
   private getStartElementsFromItem(item: Element, allChildren: Element[]): Element[] {
-    const ns = 'xs:';
-    if (item.nodeName === ns + 'element') {
+    if (item.localName === 'element') {
       const elementName = item.getAttribute('name');
       if (elementName) {
         const foundElement = allChildren.find(e => e.getAttribute('name') === elementName);
         return foundElement ? [foundElement] : [];
       }
       return [];
-    } else if (item.nodeName === ns + 'choice') {
+    } else if (item.localName === 'choice') {
       return this.getElementsInChoice(item, allChildren);
-    } else if (item.nodeName === ns + 'sequence') {
+    } else if (item.localName === 'sequence') {
       return this.getStartElementsOfSequence(item, allChildren);
-    } else if (item.nodeName === ns + 'group') {
+    } else if (item.localName === 'group') {
       // Resolve group (ref or definition) to its direct content model
       const groupName = item.getAttribute('ref');
       const grp = groupName ? this.schemaIndex.groups[groupName] : item;
       if (grp) {
         const model = this.findDirectContentModel(grp);
         if (model) {
-          if (model.nodeName === ns + 'choice') {
+          if (model.localName === 'choice') {
             return this.getElementsInChoice(model, allChildren);
-          } else if (model.nodeName === ns + 'sequence') {
+          } else if (model.localName === 'sequence') {
             return this.getStartElementsOfSequence(model, allChildren);
-          } else if (model.nodeName === ns + 'all') {
+          } else if (model.localName === 'all') {
             const results: Element[] = [];
             for (let j = 0; j < model.childNodes.length; j++) {
               const allChild = model.childNodes[j];
@@ -3554,8 +3505,7 @@ export class Schema {
     }
 
     // Check if this is a simpleType
-    const ns = 'xs:';
-    if (typeNode.nodeName !== ns + 'simpleType') {
+    if (typeNode.localName !== 'simpleType') {
       return null; // Not a simple type
     }
 
@@ -3576,7 +3526,7 @@ export class Schema {
     }
 
     // Check for union types and extract enumeration values from member types
-    const unions = this.findChildElements(typeNode, ns + 'union');
+    const unions = this.findChildElements(typeNode, 'union');
     for (const union of unions) {
       const memberTypes = union.getAttribute('memberTypes');
       if (memberTypes) {
