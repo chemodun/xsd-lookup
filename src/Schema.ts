@@ -29,6 +29,7 @@ interface HierarchyCache {
   elementDefinitionCache: Map<string, Element | undefined>; // New cache for getElementDefinition
   // Performance caches (not size-limited via ensureCacheSize):
   childElementsByDef?: WeakMap<Element, Element[]>; // cache of findAllElementsInDefinition
+  elementsInDefinitionByName: WeakMap<Element, Map<string, Element[]>>; // cache of findElementsInDefinition
   contentModelCache?: WeakMap<Element, Element | null>; // cache of findContentModel
   annotationCache?: WeakMap<Element, string>; // cache of extractAnnotationText/type fallback
   possibleChildrenResultCache: WeakMap<Element, Map<string, Map<string, string>>>; // cache final results per key (Record for low overhead)
@@ -45,6 +46,7 @@ type CacheStats = {
   attributeCache: CacheCounter;
   enhancedAttributesCache: CacheCounter;
   elementDefinitionCache: CacheCounter;
+  elementsInDefinitionByName: CacheCounter;
   childElementsByDef: CacheCounter;
   contentModelCache: CacheCounter;
   annotationCache: CacheCounter;
@@ -153,6 +155,7 @@ export class Schema {
       enhancedAttributesCache: new WeakMap<Element, EnhancedAttributeInfo[]>(),
       elementDefinitionCache: new Map(),
       childElementsByDef: new WeakMap<Element, Element[]>(),
+      elementsInDefinitionByName: new WeakMap<Element, Map<string, Element[]>>(),
       contentModelCache: new WeakMap<Element, Element | null>(),
       annotationCache: new WeakMap<Element, string>(),
       possibleChildrenResultCache: new WeakMap<Element, Map<string, Map<string, string>>>(),
@@ -170,6 +173,7 @@ export class Schema {
       attributeCache: zero(),
       enhancedAttributesCache: zero(),
       elementDefinitionCache: zero(),
+      elementsInDefinitionByName: zero(),
       childElementsByDef: zero(),
       contentModelCache: zero(),
       annotationCache: zero(),
@@ -1231,6 +1235,20 @@ export class Schema {
     try {
       if (!parentDef) return [];
 
+      const cache = this.cache.elementsInDefinitionByName;
+      let cached: Map<string, Element[]>;
+      if (cache.has(parentDef)) {
+        cached = cache.get(parentDef)!;
+        if (cached && cached.has(elementName)) {
+          if (this.shouldProfileCaches) this.cacheStats.elementsInDefinitionByName.hits++;
+          return cached.get(elementName)!;
+        }
+      } else {
+        cached = new Map();
+        cache.set(parentDef, cached);
+      }
+      if (this.shouldProfileCaches) this.cacheStats.elementsInDefinitionByName.misses++;
+
       const results: Element[] = [];
       let maxSearchDepth = 0;
 
@@ -1321,6 +1339,8 @@ export class Schema {
 
       searchInNode(typeNode);
 
+      if (this.shouldProfileCaches) this.cacheStats.elementsInDefinitionByName.sets++;
+      cached.set(elementName, results);
       return results;
     } finally {
       if (__profiling) {
