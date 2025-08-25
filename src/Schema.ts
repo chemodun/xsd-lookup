@@ -87,7 +87,6 @@ export class Schema {
   private doc: Document;
   private schemaIndex: SchemaIndex;
   private elementMap: Record<string, ElementMapEntry[]>;
-  private elementContexts: Record<string, ElementContext[]>;
   private cache!: HierarchyCache;
   private maxCacheSize: number = 100000;
   constructor(xsdFilePath: string, includeFiles: string[] = []) {
@@ -105,7 +104,6 @@ export class Schema {
     // Build indexes
     this.schemaIndex = this.indexSchema(this.doc.documentElement as any);
     this.elementMap = this.buildElementMap();
-    this.elementContexts = this.schemaIndex.elementContexts;
   }
 
   /**
@@ -362,8 +360,6 @@ export class Schema {
     types: Record<string, Element>
   ): Record<string, ElementContext[]> {
     const elementContexts: Record<string, ElementContext[]> = {};
-    // Build type-to-element mapping
-    const typeToElements = this.buildTypeToElementMapping(globalElements, types);
 
     // First, add all global elements as their own contexts
     for (const [elementName, elements] of Object.entries(globalElements)) {
@@ -388,7 +384,7 @@ export class Schema {
     // AND handles type references in context (e.g., library element using interrupt_library type)
     for (const [elementName, elements] of Object.entries(globalElements)) {
       for (const element of elements) {
-        this.extractInlineElementsFromElement(element, elementName, elementContexts, groups, types, [elementName]);
+        this.extractInlineElementsFromElement(element, elementContexts, groups, types, [elementName]);
       }
     }
 
@@ -647,7 +643,6 @@ export class Schema {
    */
   private extractInlineElementsFromElement(
     parentElement: Element,
-    parentElementName: string,
     elementContexts: Record<string, ElementContext[]>,
     groups: Record<string, Element>,
     types: Record<string, Element>,
@@ -1618,8 +1613,6 @@ export class Schema {
     const normalizedValue = this.normalizeAttributeValue(value);
 
     const restrictions: string[] = [];
-    let isValid = true;
-    let errorMessage: string | undefined;
 
     // For union types, we need to check if the value matches ANY of the validation rules
     // Priority: enumerations first (more specific), then patterns (more general)
@@ -1996,120 +1989,6 @@ export class Schema {
   }
 
   /**
-   * Build a mapping from type names to element names that use those types
-   */
-  private buildTypeToElementMapping(
-    globalElements: Record<string, Element[]>,
-    types: Record<string, Element>
-  ): Record<string, string[]> {
-    const typeToElements: Record<string, string[]> = {};
-    // Scan all global elements to find which types they use
-    for (const [elementName, elements] of Object.entries(globalElements)) {
-      for (const element of elements) {
-        const typeAttr = element.getAttribute('type');
-        if (typeAttr) {
-          if (!typeToElements[typeAttr]) typeToElements[typeAttr] = [];
-          if (!typeToElements[typeAttr].includes(elementName)) {
-            typeToElements[typeAttr].push(elementName);
-          }
-        }
-
-        // Also scan inline elements within this global element
-        this.scanElementForInlineTypeReferences(element, typeToElements);
-      }
-    }
-
-    // Also scan type definitions for nested type references
-    for (const [typeName, typeElement] of Object.entries(types)) {
-      this.scanTypeForTypeReferences(typeElement, typeName, typeToElements);
-    }
-
-    return typeToElements;
-  }
-
-  /**
-   * Recursively scan a type element for type references
-   * @param node The type element to scan
-   * @param parentContext The parent type name for context
-   * @param typeToElements Map to accumulate type-to-element mappings
-   * @param ns The XML Schema namespace prefix
-   */
-  private scanTypeForTypeReferences(
-    node: Element,
-    parentContext: string,
-    typeToElements: Record<string, string[]>,
-  ): void {
-    if (!node || node.nodeType !== 1) return;
-
-    // Look for elements with type attributes
-    if (node.localName === 'element') {
-      const typeAttr = node.getAttribute('type');
-      if (typeAttr) {
-        if (!typeToElements[typeAttr]) typeToElements[typeAttr] = [];
-        if (!typeToElements[typeAttr].includes(parentContext)) {
-          typeToElements[typeAttr].push(parentContext);
-        }
-      }
-    }
-
-    // Look for extension/restriction base attributes
-    if ((node.localName === 'extension' || node.localName === 'restriction')) {
-      const baseAttr = node.getAttribute('base');
-      if (baseAttr) {
-        if (!typeToElements[baseAttr]) typeToElements[baseAttr] = [];
-        if (!typeToElements[baseAttr].includes(parentContext)) {
-          typeToElements[baseAttr].push(parentContext);
-        }
-      }
-    }
-
-    // Recursively scan children
-    for (let i = 0; i < node.childNodes.length; i++) {
-      const child = node.childNodes[i];
-      if (child.nodeType === 1) {
-        this.scanTypeForTypeReferences(child as Element, parentContext, typeToElements);
-      }
-    }
-  }
-
-  /**
-   * Recursively scan an element for inline elements that have type references
-   * @param element The element to scan for inline type references
-   * @param typeToElements Map to accumulate type-to-element mappings
-   * @param ns The XML Schema namespace prefix
-   */
-  private scanElementForInlineTypeReferences(
-    element: Element,
-    typeToElements: Record<string, string[]>,
-  ): void {
-    if (!element || element.nodeType !== 1) return;
-
-    // Look for inline element definitions
-    for (let i = 0; i < element.childNodes.length; i++) {
-      const child = element.childNodes[i];
-      if (child.nodeType === 1) {
-        const childElement = child as Element;
-
-        // If this is an inline element with a type attribute
-        if (childElement.localName === 'element') {
-          const elementName = childElement.getAttribute('name');
-          const typeAttr = childElement.getAttribute('type');
-
-          if (elementName && typeAttr) {
-            if (!typeToElements[typeAttr]) typeToElements[typeAttr] = [];
-            if (!typeToElements[typeAttr].includes(elementName)) {
-              typeToElements[typeAttr].push(elementName);
-            }
-          }
-        }
-
-        // Recursively scan child elements
-        this.scanElementForInlineTypeReferences(childElement, typeToElements);
-      }
-    }
-  }
-
-  /**
    * Find element using top-down hierarchy search
    * @param elementName The element to find
    * @param topDownHierarchy Hierarchy from root to immediate parent [root, ..., immediate_parent]
@@ -2263,10 +2142,6 @@ export class Schema {
   public getPossibleChildElements(elementName: string, hierarchy: string[] = [], previousSibling: string = ''): Map<string, string> {
     const t0 = (globalThis.performance?.now?.() ?? Date.now());
     let tDef = 0, tFindAll = 0, tFilter = 0, tAnnot = 0;
-
-    // Create cache key including previousSibling for proper caching
-    const siblingKey = previousSibling ? `prev:${previousSibling}` : 'noprev';
-    const cacheKey = `children:${elementName}:${hierarchy.join('>')}:${siblingKey}`;
 
     // Fast-path cache for final result
     const resultCache = this.cache.possibleChildrenResultCache;
@@ -2748,7 +2623,7 @@ export class Schema {
    * @param allChildren All possible child elements for reference
    * @returns Valid next elements in the sequence
    */
-  private getValidNextInSequence(sequence: Element, previousSibling: Element, allChildren: Element[], suppressFallback: boolean = false): Element[] {
+  private getValidNextInSequence(sequence: Element, previousSibling: Element, allChildren: Element[]): Element[] {
     const sequenceItems: Element[] = [];
 
     // Collect all sequence items (elements, choices, groups, etc.)
@@ -2962,7 +2837,7 @@ export class Schema {
               }
             }
           } else if (model.localName === 'sequence') {
-            const seqNext = this.getValidNextInSequence(model, previousSibling, allChildren, true);
+            const seqNext = this.getValidNextInSequence(model, previousSibling, allChildren);
             validNext.push(...seqNext);
           } else if (model.localName === 'all') {
             // xs:all has no ordering; allow allChildren
@@ -3028,20 +2903,6 @@ export class Schema {
         break; // Required item found, stop here
       }
     }
-
-    // If all following items are optional (no required items encountered), then
-    // after prioritizing these optional next items, allow any other elements
-    // from the upper-level choice (i.e., allChildren minus those already suggested).
-    let hasRequiredAfter = false;
-    for (let i = previousPosition + 1; i < sequenceItems.length; i++) {
-      const minOccurs = this.getEffectiveMinOccurs(sequenceItems[i], sequence);
-      if (minOccurs >= 1) {
-        hasRequiredAfter = true;
-        break;
-      }
-    }
-
-    // Do not fall back to other alternatives of the same choice here; that would allow do_elseif/do_else after unrelated items like do_all
 
     // When previous item is a choice, avoid leaking non-start elements of its sequence alternatives
     if (previousItem && previousItem.localName === 'choice' && prevChoiceNonStart && prevChoiceNonStart.size > 0) {
