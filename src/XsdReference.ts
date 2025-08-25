@@ -90,10 +90,10 @@ export class XsdReference {
     }
   }
 
-    /**
-   * Get the appropriate schema for a given XML file (legacy method)
-   * @deprecated Use XsdDetector.detectSchemaFromXml() and then getSchema() instead
-   */
+  /**
+ * Get the appropriate schema for a given XML file (legacy method)
+ * @deprecated Use XsdDetector.detectSchemaFromXml() and then getSchema() instead
+ */
   public getSchemaForFile(xmlFilePath: string): Schema | null {
     const fileInfo = XsdDetector.detectSchemaFromXml(xmlFilePath);
     if (!fileInfo.schemaType) {
@@ -282,7 +282,7 @@ export class XsdReference {
             return (attr.minLength !== undefined) || (attr.maxLength !== undefined);
           case 'range':
             return (attr.minInclusive !== undefined) || (attr.maxInclusive !== undefined) ||
-                   (attr.minExclusive !== undefined) || (attr.maxExclusive !== undefined);
+              (attr.minExclusive !== undefined) || (attr.maxExclusive !== undefined);
           default:
             return false;
         }
@@ -339,7 +339,7 @@ export class XsdReference {
       }
     } else {
       // If no patterns defined, treat it as not matched for enumeration checks
-      isPatternsMatched = ! (attribute.enumValues && attribute.enumValues.length > 0);
+      isPatternsMatched = !(attribute.enumValues && attribute.enumValues.length > 0);
     }
 
 
@@ -492,8 +492,8 @@ export class XsdReference {
    */
   private static isXmlInfrastructureAttribute(attributeName: string): boolean {
     return attributeName.startsWith('xmlns:') ||
-           attributeName.startsWith('xsi:') ||
-           attributeName === 'xmlns';
+      attributeName.startsWith('xsi:') ||
+      attributeName === 'xmlns';
   }
 
   /**
@@ -522,14 +522,14 @@ export class XsdReference {
     return schema.getPossibleChildElements(elementName, hierarchy, previousSibling);
   }
 
-/**
-   * Check if a specific element is valid as a child of a given parent in the provided hierarchy,
-   * using the same engine and constraints as getPossibleChildElements, but without calling it directly.
-   *
-   * Contract:
-   * - Inputs: elementName, parentName, parentHierarchy (bottom-up: [immediate_parent, ..., root]), optional previousSibling
-   * - Output: boolean indicating if elementName can appear next under parentName respecting content model and sequence rules
-   */
+  /**
+     * Check if a specific element is valid as a child of a given parent in the provided hierarchy,
+     * using the same engine and constraints as getPossibleChildElements, but without calling it directly.
+     *
+     * Contract:
+     * - Inputs: elementName, parentName, parentHierarchy (bottom-up: [immediate_parent, ..., root]), optional previousSibling
+     * - Output: boolean indicating if elementName can appear next under parentName respecting content model and sequence rules
+     */
   public isValidChild(
     schemaName: string,
     elementName: string,
@@ -577,7 +577,7 @@ export class XsdReference {
    */
   public dispose(): void {
     // Clear all schemas from the cache
-    this.schemas.forEach((schema, name) => this.clearSchema(name)); // Clear each schema's internal caches
+    this.schemas.forEach((_schema, name) => this.clearSchema(name)); // Clear each schema's internal caches
     this.schemas.clear();
     this.xsdDirectory = ''; // Reset the directory if needed
   }
