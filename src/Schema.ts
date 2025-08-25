@@ -1,6 +1,8 @@
 import * as fs from 'fs';
+import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { DOMParser } from '@xmldom/xmldom';
+
 
 interface ElementMapEntry {
   parent: string | null;
@@ -39,6 +41,24 @@ interface HierarchyCache {
   modelStartNamesCache?: WeakMap<Element, Set<string>>; // contentModel -> start names
   containsCache?: WeakMap<Element, Map<string, boolean>>; // item Element -> elementName -> contains?
 }
+
+type CacheCounter = { hits: number; misses: number; sets: number };
+type CacheStats = {
+  hierarchyLookups: CacheCounter;
+  definitionReachability: CacheCounter;
+  elementSearchResults: CacheCounter;
+  attributeCache: CacheCounter;
+  hierarchyValidation: CacheCounter;
+  elementDefinitionCache: CacheCounter;
+  childElementsByDef: CacheCounter;
+  contentModelCache: CacheCounter;
+  annotationCache: CacheCounter;
+  possibleChildrenResultCache: CacheCounter;
+  validChildCache: CacheCounter;
+  modelStartNamesCache: CacheCounter;
+  modelNextNamesCache: CacheCounter;
+  containsCache: CacheCounter;
+};
 
 export interface ElementLocation {
   uri: string;
@@ -85,14 +105,19 @@ interface ElementContext {
 
 export class Schema {
   private doc: Document;
+  private name: string = '';
   private schemaIndex: SchemaIndex;
   private elementMap: Record<string, ElementMapEntry[]>;
   private cache!: HierarchyCache;
+  private cacheStats!: CacheStats;
   private maxCacheSize: number = 100000;
+  private shouldProfileCaches: boolean = false;
   constructor(xsdFilePath: string, includeFiles: string[] = []) {
     // Initialize caches and metrics first
     this.initializeCaches();
-
+    this.initializeCacheStats();
+    this.shouldProfileCaches = ((process.env.XSDL_PROFILE_CACHES || '').trim() === '1');
+    this.name = path.basename(xsdFilePath);
     this.doc = this.loadXml(xsdFilePath);
 
     // Merge include files if any
@@ -126,6 +151,46 @@ export class Schema {
       modelStartNamesCache: new WeakMap<Element, Set<string>>(),
       containsCache: new WeakMap<Element, Map<string, boolean>>()
     };
+  }
+
+  private initializeCacheStats(): void {
+    const zero = (): CacheCounter => ({ hits: 0, misses: 0, sets: 0 });
+    this.cacheStats = {
+      hierarchyLookups: zero(),
+      definitionReachability: zero(),
+      elementSearchResults: zero(),
+      attributeCache: zero(),
+      hierarchyValidation: zero(),
+      elementDefinitionCache: zero(),
+      childElementsByDef: zero(),
+      contentModelCache: zero(),
+      annotationCache: zero(),
+      possibleChildrenResultCache: zero(),
+      validChildCache: zero(),
+      modelStartNamesCache: zero(),
+      modelNextNamesCache: zero(),
+      containsCache: zero()
+    };
+  }
+
+  private printCacheStats(): void {
+    if (!this.shouldProfileCaches) return;
+    const lines: string[] = [];
+    const fmt = (name: keyof CacheStats, c: CacheCounter) => `${name}: hits=${c.hits}, misses=${c.misses}, sets=${c.sets}`;
+    lines.push(`=== XSD-Lookup Cache Stats for "${this.name}" ===`);
+    lines.push(
+      fmt('elementDefinitionCache', this.cacheStats.elementDefinitionCache),
+      fmt('childElementsByDef', this.cacheStats.childElementsByDef),
+      fmt('contentModelCache', this.cacheStats.contentModelCache),
+      fmt('annotationCache', this.cacheStats.annotationCache),
+      fmt('possibleChildrenResultCache', this.cacheStats.possibleChildrenResultCache),
+      fmt('validChildCache', this.cacheStats.validChildCache),
+      fmt('modelStartNamesCache', this.cacheStats.modelStartNamesCache),
+      fmt('modelNextNamesCache', this.cacheStats.modelNextNamesCache),
+      fmt('containsCache', this.cacheStats.containsCache)
+    );
+    // eslint-disable-next-line no-console
+    console.log(lines.join('\n'));
   }
 
   /**
@@ -727,14 +792,17 @@ export class Schema {
 
     // Check if we have an exact match in cache
     if (this.cache.elementDefinitionCache.has(fullCacheKey)) {
+      if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.hits++;
       const cached = this.cache.elementDefinitionCache.get(fullCacheKey);
       if (cached) this.enrichElementAnnotationFromTypeIfMissing(cached);
       return cached;
     }
+    if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.misses++;
     const elementsFromMap = this.elementMap[elementName];
     if (elementsFromMap && elementsFromMap.length === 1) {
       const elementFromMap = elementsFromMap[0].node;
       this.cache.elementDefinitionCache.set(fullCacheKey, elementFromMap);
+      if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.sets++;
       this.ensureCacheSize();
       this.enrichElementAnnotationFromTypeIfMissing(elementFromMap);
       return elementFromMap;
@@ -749,7 +817,9 @@ export class Schema {
         const fullKey = `${elementName}::${keyPrefix}`;
         const cachedElement = this.cache.elementDefinitionCache.get(fullKey);
         if (cachedElement) {
+          if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.hits++;
           this.cache.elementDefinitionCache.set(fullCacheKey, cachedElement);
+          if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.sets++;
           this.ensureCacheSize();
           this.enrichElementAnnotationFromTypeIfMissing(cachedElement);
           return cachedElement;
@@ -788,6 +858,7 @@ export class Schema {
           // Cache this intermediate result too (it might be useful for future lookups)
           const intermediateCacheKey = `${elementName}::${currentHierarchy.join('|')}`;
           this.cache.elementDefinitionCache.set(intermediateCacheKey, result);
+          if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.sets++;
 
           break; // Exit the loop since we found a match
         }
@@ -801,6 +872,7 @@ export class Schema {
 
     // Cache the final result (even if undefined)
     this.cache.elementDefinitionCache.set(fullCacheKey, result);
+    if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.sets++;
     this.ensureCacheSize();
 
     return result;
@@ -2140,7 +2212,6 @@ export class Schema {
    * @returns Map where key is child element name and value is its annotation text
    */
   public getPossibleChildElements(elementName: string, hierarchy: string[] = [], previousSibling: string = ''): Map<string, string> {
-    const t0 = (globalThis.performance?.now?.() ?? Date.now());
     let tDef = 0, tFindAll = 0, tFilter = 0, tAnnot = 0;
 
     // Fast-path cache for final result
@@ -2157,6 +2228,7 @@ export class Schema {
     let cachedMap = resultCache.get(elementDef);
     if (cachedMap) {
       if (cachedMap.has(previousSibling)) {
+        if (this.shouldProfileCaches) this.cacheStats.possibleChildrenResultCache.hits++;
         return new Map(cachedMap.get(previousSibling));
       }
     } else {
@@ -2212,8 +2284,13 @@ export class Schema {
 
     // Cache the final result map for fast retrieval
     cachedMap.set(previousSibling, result);
+    if (this.shouldProfileCaches) this.cacheStats.possibleChildrenResultCache.sets++;
     // Optional profiling output
-
+    if ((process.env.XSDL_PROFILE_CHILDREN || '').trim() === '1') {
+      const msg = `getPossibleChildElements(${elementName}) -> ${result.size} children; def=${tDef.toFixed(3)}ms; findAll=${tFindAll.toFixed(3)}ms; filter=${tFilter.toFixed(3)}ms; annot=${tAnnot.toFixed(3)}ms`;
+      // eslint-disable-next-line no-console
+      console.log(msg);
+    }
     return result;
   }
 
@@ -2242,57 +2319,58 @@ export class Schema {
     if (!byPrev) { byPrev = new Map(); this.cache.validChildCache!.set(parentDef, byPrev); }
     let byChild = byPrev.get(prevKey);
     if (!byChild) { byChild = new Map(); byPrev.set(prevKey, byChild); }
-    if (byChild.has(elementName)) return byChild.get(elementName)!;
-
+    if (byChild.has(elementName)) { if (this.shouldProfileCaches) this.cacheStats.validChildCache.hits++; return byChild.get(elementName)!; }
+    this.cacheStats.validChildCache.misses++
     // Discover all immediate child element candidates (cached)
     const allChildren = this.getChildElementsCached(parentDef);
-    if (allChildren.length === 0) { byChild.set(elementName, false); return false; }
+    if (allChildren.length === 0) { byChild.set(elementName, false); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return false; }
 
     // Find the concrete Element node for the requested child; if not declared, it's invalid
     const candidate = allChildren.find(el => el.getAttribute('name') === elementName);
-    if (!candidate) { byChild.set(elementName, false); return false; }
+    if (!candidate) { byChild.set(elementName, false); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return false; }
 
     // If there is no ordering constraint or xs:all, declaration is sufficient
     const contentModel = this.getCachedContentModel(parentDef);
 
     const prevSibling = allChildren.find(el => el.getAttribute('name') === previousSibling);
     if (!previousSibling || !prevSibling) {
-      if (!contentModel) { byChild.set(elementName, true); return true; }
+      if (!contentModel) { byChild.set(elementName, true); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return true; }
       const modelType = contentModel.localName;
-      if (modelType === 'all') { byChild.set(elementName, true); return true; }
+      if (modelType === 'all') { byChild.set(elementName, true); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return true; }
       if (modelType === 'choice') {
         // Check if the candidate can start any alternative in the choice
         const startSet = this.getModelStartSet(contentModel, allChildren);
         const ok = startSet.has(elementName);
-        byChild.set(elementName, ok);
+        byChild.set(elementName, ok); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++;
         return ok;
       }
       if (modelType === 'sequence') {
         // Check if the candidate can start the sequence (respecting minOccurs chain)
         const startSet = this.getModelStartSet(contentModel, allChildren);
         const ok = startSet.has(elementName);
-        byChild.set(elementName, ok);
+        byChild.set(elementName, ok); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++;
         return ok;
       }
       // Unknown model type: be permissive like getPossibleChildElements fallback
-      byChild.set(elementName, true);
+      byChild.set(elementName, true); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++;
       return true;
     }
 
     // There is a previous sibling; handle ordering constraints efficiently by filtering only the candidate
-    if (!contentModel) { byChild.set(elementName, true); return true; }
-    if (contentModel.localName === 'all') { byChild.set(elementName, true); return true; }
+    if (!contentModel) { byChild.set(elementName, true); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return true; }
+    if (contentModel.localName === 'all') { byChild.set(elementName, true); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return true; }
     // Use cached next-name set for this content model and previous sibling
     const nextSet = this.getModelNextSet(contentModel, previousSibling, prevSibling, allChildren);
     const ok = nextSet.has(elementName);
-    byChild.set(elementName, ok);
+    byChild.set(elementName, ok); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++;
     return ok;
   }
 
   // Compute and cache start-name set for a content model
   private getModelStartSet(model: Element, allChildren: Element[]): Set<string> {
     let cached = this.cache.modelStartNamesCache!.get(model);
-    if (cached) return cached;
+    if (cached) { if (this.shouldProfileCaches) this.cacheStats.modelStartNamesCache.hits++; return cached; }
+    if (this.shouldProfileCaches) this.cacheStats.modelStartNamesCache.misses++;
     let starters: Element[] = [];
     if (model.localName === 'choice' || model.localName === 'all') {
       starters = this.getElementsInChoice(model, allChildren);
@@ -2304,6 +2382,7 @@ export class Schema {
     }
     const set = new Set(starters.map(e => e.getAttribute('name')!).filter(Boolean) as string[]);
     this.cache.modelStartNamesCache!.set(model, set);
+    if (this.shouldProfileCaches) this.cacheStats.modelStartNamesCache.sets++;
     return set;
   }
 
@@ -2313,10 +2392,12 @@ export class Schema {
     if (!byPrev) { byPrev = new Map(); this.cache.modelNextNamesCache!.set(model, byPrev); }
     const prevKey = previousSibling || '__START__';
     const existing = byPrev.get(prevKey);
-    if (existing) return existing;
+    if (existing) { if (this.shouldProfileCaches) this.cacheStats.modelNextNamesCache.hits++; return existing; }
+    if (this.shouldProfileCaches) this.cacheStats.modelNextNamesCache.misses++;
     const nextElems = this.getValidNextElementsInContentModel(model, prevSibling, allChildren);
     const set = new Set(nextElems.map(e => e.getAttribute('name')!).filter(Boolean) as string[]);
     byPrev.set(prevKey, set);
+    if (this.shouldProfileCaches) this.cacheStats.modelNextNamesCache.sets++;
     return set;
   }
 
@@ -2403,9 +2484,11 @@ export class Schema {
   // Cached content model resolver
   private getCachedContentModel(def: Element): Element | null {
     const cache = this.cache.contentModelCache!;
-    if (cache.has(def)) return cache.get(def)!;
+    if (cache.has(def)) { if (this.shouldProfileCaches) this.cacheStats.contentModelCache.hits++; return cache.get(def)!; }
+    if (this.shouldProfileCaches) this.cacheStats.contentModelCache.misses++;
     const model = this.findContentModel(def);
     cache.set(def, model);
+    if (this.shouldProfileCaches) this.cacheStats.contentModelCache.sets++;
     return model;
   }
 
@@ -2413,9 +2496,11 @@ export class Schema {
   private getChildElementsCached(def: Element): Element[] {
     const cache = this.cache.childElementsByDef!;
     const cached = cache.get(def);
-    if (cached) return cached;
+    if (cached) { if (this.shouldProfileCaches) this.cacheStats.childElementsByDef.hits++; return cached; }
+    if (this.shouldProfileCaches) this.cacheStats.childElementsByDef.misses++;
     const elems = this.findAllElementsInDefinition(def);
     cache.set(def, elems);
+    if (this.shouldProfileCaches) this.cacheStats.childElementsByDef.sets++;
     return elems;
   }
 
@@ -2423,7 +2508,8 @@ export class Schema {
   private getAnnotationCached(el: Element): string {
     const cache = this.cache.annotationCache!;
     const existing = cache.get(el);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) { if (this.shouldProfileCaches) this.cacheStats.annotationCache.hits++; return existing; }
+    if (this.shouldProfileCaches) this.cacheStats.annotationCache.misses++;
     let annotation = Schema.extractAnnotationText(el) || '';
     if (!annotation) {
       const typeName = el.getAttribute('type');
@@ -2435,6 +2521,7 @@ export class Schema {
       }
     }
     cache.set(el, annotation);
+    if (this.shouldProfileCaches) this.cacheStats.annotationCache.sets++;
     return annotation;
   }
 
@@ -2990,11 +3077,26 @@ export class Schema {
     // Initialize visited set for cycle detection across recursive traversals
     if (!visited) visited = new Set<Element>();
 
+    // Fast path via containsCache keyed by item Element and child name
+    const name = element.getAttribute('name') || '';
+    if (name) {
+      let byName = this.cache.containsCache!.get(item);
+      if (!byName) { byName = new Map(); this.cache.containsCache!.set(item, byName); }
+      const existing = byName.get(name);
+      if (existing !== undefined) { if (this.shouldProfileCaches) this.cacheStats.containsCache.hits++; return existing; }
+      if (this.shouldProfileCaches) this.cacheStats.containsCache.misses++;
+      // We'll compute and store before return below
+    }
+
     if (item.localName === 'element') {
-      return item === element;
+      const res = (item === element);
+      if (name) { const byName = this.cache.containsCache!.get(item)!; byName.set(name, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
+      return res;
     } else if (item.localName === 'choice') {
       // Check if any element in the choice matches
-      return this.choiceContainsElement(item, element, visited);
+      const res = this.choiceContainsElement(item, element, visited);
+      if (name) { const byName = this.cache.containsCache!.get(item)!; byName.set(name, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
+      return res;
     } else if (item.localName === 'sequence') {
       if (visited.has(item)) return false;
       visited.add(item);
@@ -3003,10 +3105,12 @@ export class Schema {
         const child = item.childNodes[i];
         if (child.nodeType === 1) {
           if (this.itemContainsElement(child as Element, element, visited)) {
+            if (name) { const byName = this.cache.containsCache!.get(item)!; byName.set(name, true); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
             return true;
           }
         }
       }
+      if (name) { const byName = this.cache.containsCache!.get(item)!; byName.set(name, false); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
       return false;
     } else if (item.localName === 'group') {
       if (visited.has(item)) return false;
@@ -3017,11 +3121,13 @@ export class Schema {
       if (grp) {
         const model = this.findDirectContentModel(grp);
         if (model) {
-          return this.itemContainsElement(model, element, visited);
+          const res = this.itemContainsElement(model, element, visited);
+          if (name) { const byName = this.cache.containsCache!.get(item)!; byName.set(name, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
+          return res;
         }
       }
     }
-
+    if (name) { const byName = this.cache.containsCache!.get(item)!; byName.set(name, false); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
     return false;
   }
 
@@ -3418,6 +3524,7 @@ export class Schema {
    * Clear all caches and resources
    */
   public dispose(): void {
+    this.printCacheStats();
     this.initializeCaches();
   }
 }
