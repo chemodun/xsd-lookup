@@ -32,7 +32,7 @@ interface HierarchyCache {
   childElementsByDef?: WeakMap<Element, Element[]>; // cache of findAllElementsInDefinition
   contentModelCache?: WeakMap<Element, Element | null>; // cache of findContentModel
   annotationCache?: WeakMap<Element, string>; // cache of extractAnnotationText/type fallback
-  possibleChildrenResultCache?: Record<string, Map<string, string>>; // cache final results per key (Record for low overhead)
+  possibleChildrenResultCache: WeakMap<Element, Map<string, Map<string, string>>>; // cache final results per key (Record for low overhead)
   // New caches for performance
   validChildCache?: WeakMap<Element, Map<string, Map<string, boolean>>>; // parentDef -> prevKey -> childName -> boolean
   modelNextNamesCache?: WeakMap<Element, Map<string, Set<string>>>; // contentModel -> prevKey -> allowed names
@@ -89,7 +89,7 @@ export class Schema {
   private elementMap: Record<string, ElementMapEntry[]>;
   private elementContexts: Record<string, ElementContext[]>;
   private cache!: HierarchyCache;
-  private maxCacheSize: number = 10000;
+  private maxCacheSize: number = 100000;
   constructor(xsdFilePath: string, includeFiles: string[] = []) {
     // Initialize caches and metrics first
     this.initializeCaches();
@@ -122,7 +122,7 @@ export class Schema {
       childElementsByDef: new WeakMap<Element, Element[]>(),
       contentModelCache: new WeakMap<Element, Element | null>(),
       annotationCache: new WeakMap<Element, string>(),
-      possibleChildrenResultCache: {},
+      possibleChildrenResultCache: new WeakMap<Element, Map<string, Map<string, string>>>(),
       validChildCache: new WeakMap<Element, Map<string, Map<string, boolean>>>(),
       modelNextNamesCache: new WeakMap<Element, Map<string, Set<string>>>(),
       modelStartNamesCache: new WeakMap<Element, Set<string>>(),
@@ -178,16 +178,6 @@ export class Schema {
       toKeep.forEach(([key, value]) => this.cache.elementDefinitionCache.set(key, value));
     }
 
-    // Manage possibleChildrenResultCache size approximately. Since it's a Record, approximate size via keys length.
-    if (this.cache.possibleChildrenResultCache) {
-      const keys = Object.keys(this.cache.possibleChildrenResultCache);
-      if (keys.length > this.maxCacheSize) {
-        const toKeep = keys.slice(-Math.floor(this.maxCacheSize / 2));
-        const newRec: Record<string, Map<string, string>> = {};
-        for (const k of toKeep) newRec[k] = this.cache.possibleChildrenResultCache[k];
-        this.cache.possibleChildrenResultCache = newRec;
-      }
-    }
   }
 
 
@@ -2299,7 +2289,7 @@ export class Schema {
    * @param previousSibling Optional previous sibling element name to filter results based on sequence constraints
    * @returns Map where key is child element name and value is its annotation text
    */
-  public getPossibleChildElements(elementName: string, hierarchy: string[] = [], previousSibling?: string): Map<string, string> {
+  public getPossibleChildElements(elementName: string, hierarchy: string[] = [], previousSibling: string = ''): Map<string, string> {
     const t0 = (globalThis.performance?.now?.() ?? Date.now());
     let tDef = 0, tFindAll = 0, tFilter = 0, tAnnot = 0;
 
@@ -2308,11 +2298,7 @@ export class Schema {
     const cacheKey = `children:${elementName}:${hierarchy.join('>')}:${siblingKey}`;
 
     // Fast-path cache for final result
-    const resCache = this.cache.possibleChildrenResultCache;
-    const cachedMap = resCache ? resCache[cacheKey] : undefined;
-    if (cachedMap) {
-      return new Map(cachedMap);
-    }
+    const resultCache = this.cache.possibleChildrenResultCache;
 
     // Get the element definition using the same logic as other methods
     const tDef0 = (globalThis.performance?.now?.() ?? Date.now());
@@ -2320,11 +2306,16 @@ export class Schema {
     tDef += (globalThis.performance?.now?.() ?? Date.now()) - tDef0;
 
     if (!elementDef) {
-      // Cache empty result (new cache)
-      if (resCache) {
-        resCache[cacheKey] = new Map();
-      }
       return new Map<string, string>();
+    }
+    let cachedMap = resultCache.get(elementDef);
+    if (cachedMap) {
+      if (cachedMap.has(previousSibling)) {
+        return new Map(cachedMap.get(previousSibling));
+      }
+    } else {
+      cachedMap = new Map();
+      resultCache.set(elementDef, cachedMap);
     }
 
     // Get all possible child elements
@@ -2333,11 +2324,11 @@ export class Schema {
     tFindAll += (globalThis.performance?.now?.() ?? Date.now()) - tFindAll0;
 
     let filteredElements: Element[];
-
+    const prevSibling = previousSibling ? childElements.find(el => el.getAttribute('name') === previousSibling) : undefined;
     // If previousSibling is provided, filter based on sequence/choice constraints
-    if (previousSibling) {
+    if (previousSibling && prevSibling) {
       const tFilter0 = (globalThis.performance?.now?.() ?? Date.now());
-      filteredElements = this.filterElementsBySequenceConstraints(elementDef, childElements, previousSibling);
+      filteredElements = this.filterElementsBySequenceConstraints(elementDef, childElements, prevSibling);
       tFilter += (globalThis.performance?.now?.() ?? Date.now()) - tFilter0;
     } else {
       // No previous sibling: honor the content model and only return start-capable elements
@@ -2374,10 +2365,7 @@ export class Schema {
     tAnnot += (globalThis.performance?.now?.() ?? Date.now()) - tAnnot0;
 
     // Cache the final result map for fast retrieval
-    if (resCache) {
-      resCache[cacheKey] = new Map(result);
-    }
-
+    cachedMap.set(previousSibling, result);
     // Optional profiling output
     if ((process.env.XSDL_PROFILE_CHILDREN || '').trim() === '1') {
       const t1 = (globalThis.performance?.now?.() ?? Date.now());
@@ -2430,7 +2418,9 @@ export class Schema {
 
     // If there is no ordering constraint or xs:all, declaration is sufficient
     const contentModel = this.getCachedContentModel(parentDef);
-    if (!previousSibling) {
+
+    const prevSibling = allChildren.find(el => el.getAttribute('name') === previousSibling);
+    if (!previousSibling || !prevSibling) {
       if (!contentModel) { byChild.set(elementName, true); return true; }
       const modelType = contentModel.nodeName;
       if (modelType === 'xs:all') { byChild.set(elementName, true); return true; }
@@ -2456,9 +2446,8 @@ export class Schema {
     // There is a previous sibling; handle ordering constraints efficiently by filtering only the candidate
     if (!contentModel) { byChild.set(elementName, true); return true; }
     if (contentModel.nodeName === 'xs:all') { byChild.set(elementName, true); return true; }
-
     // Use cached next-name set for this content model and previous sibling
-    const nextSet = this.getModelNextSet(contentModel, previousSibling, allChildren);
+    const nextSet = this.getModelNextSet(contentModel, previousSibling, prevSibling, allChildren);
     const ok = nextSet.has(elementName);
     byChild.set(elementName, ok);
     return ok;
@@ -2484,13 +2473,13 @@ export class Schema {
   }
 
   // Compute and cache next-name set for a content model given previous sibling
-  private getModelNextSet(model: Element, previousSibling: string, allChildren: Element[]): Set<string> {
+  private getModelNextSet(model: Element, previousSibling: string, prevSibling: Element, allChildren: Element[]): Set<string> {
     let byPrev = this.cache.modelNextNamesCache!.get(model);
     if (!byPrev) { byPrev = new Map(); this.cache.modelNextNamesCache!.set(model, byPrev); }
     const prevKey = previousSibling || '__START__';
     const existing = byPrev.get(prevKey);
     if (existing) return existing;
-    const nextElems = this.getValidNextElementsInContentModel(model, previousSibling, allChildren);
+    const nextElems = this.getValidNextElementsInContentModel(model, prevSibling, allChildren);
     const set = new Set(nextElems.map(e => e.getAttribute('name')!).filter(Boolean) as string[]);
     byPrev.set(prevKey, set);
     return set;
@@ -2503,7 +2492,7 @@ export class Schema {
    * @param previousSibling The name of the previous sibling element
    * @returns Filtered array of elements that are valid as next elements
    */
-  private filterElementsBySequenceConstraints(elementDef: Element, allChildren: Element[], previousSibling: string): Element[] {
+  private filterElementsBySequenceConstraints(elementDef: Element, allChildren: Element[], previousSibling: Element): Element[] {
     // Find the content model (sequence/choice) within the element definition (cached)
     const contentModel = this.getCachedContentModel(elementDef);
 
@@ -2670,7 +2659,7 @@ export class Schema {
    * @param allChildren All possible child elements for reference
    * @returns Filtered elements that are valid as next elements
    */
-  private getValidNextElementsInContentModel(contentModel: Element, previousSibling: string, allChildren: Element[]): Element[] {
+  private getValidNextElementsInContentModel(contentModel: Element, previousSibling: Element, allChildren: Element[]): Element[] {
     const modelType = contentModel.nodeName;
 
     if (modelType === 'xs:choice') {
@@ -2693,7 +2682,7 @@ export class Schema {
    * @param allChildren All possible child elements for reference
    * @returns Valid next elements
    */
-  private getValidNextInChoice(choice: Element, previousSibling: string, allChildren: Element[]): Element[] {
+  private getValidNextInChoice(choice: Element, previousSibling: Element, allChildren: Element[]): Element[] {
     // If previousSibling belongs to a nested sequence option within this choice,
     // continue inside that same sequence arm and also allow restarting that arm (choice repetition).
     // IMPORTANT: Prefer scanning the direct alternatives of this choice first to avoid
@@ -2754,7 +2743,8 @@ export class Schema {
       }
 
       const allowed = new Set<string>();
-      const prevIndex = items.findIndex(it => it.name === previousSibling);
+      const previousSiblingName = previousSibling.getAttribute('name');
+      const prevIndex = items.findIndex(it => it.name === previousSiblingName);
       if (prevIndex !== -1) {
         // 1) Repetition of the current element if allowed
         const cur = items[prevIndex];
@@ -2794,7 +2784,7 @@ export class Schema {
    * @param allChildren All possible child elements for reference
    * @returns Valid next elements in the sequence
    */
-  private getValidNextInSequence(sequence: Element, previousSibling: string, allChildren: Element[], suppressFallback: boolean = false): Element[] {
+  private getValidNextInSequence(sequence: Element, previousSibling: Element, allChildren: Element[], suppressFallback: boolean = false): Element[] {
     const sequenceItems: Element[] = [];
 
     // Collect all sequence items (elements, choices, groups, etc.)
@@ -2808,6 +2798,8 @@ export class Schema {
     // Find the position of the previous sibling in the sequence
     let previousPosition = -1;
     let previousItem: Element | null = null;
+
+    const previousSiblingName = previousSibling.getAttribute('name');
 
     for (let i = 0; i < sequenceItems.length; i++) {
       const item = sequenceItems[i];
@@ -2886,7 +2878,7 @@ export class Schema {
           }
         }
         const allowedNames = new Set<string>();
-        const prevIndex = items.findIndex(it => it.name === previousSibling);
+        const prevIndex = items.findIndex(it => it.name === previousSiblingName);
         if (prevIndex !== -1) {
           // 1) Repetition of the current element if allowed
           const cur = items[prevIndex];
@@ -2987,7 +2979,7 @@ export class Schema {
                 }
               }
               const allowedNames = new Set<string>();
-              const prevIndex = items.findIndex(it => it.name === previousSibling);
+              const prevIndex = items.findIndex(it => it.name === previousSiblingName);
               if (prevIndex !== -1) {
                 const cur = items[prevIndex];
                 if (cur.maxOccurs === 'unbounded' || (typeof cur.maxOccurs === 'number' && cur.maxOccurs > 1)) {
@@ -3041,7 +3033,7 @@ export class Schema {
             } else if (model && model.nodeName === ns + 'sequence') {
               validNext.push(...this.getStartElementsOfSequence(model, allChildren));
             } else {
-              const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSibling);
+              const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSiblingName);
               if (repeatElement) validNext.push(repeatElement);
             }
           }
@@ -3050,7 +3042,7 @@ export class Schema {
           validNext.push(...this.getStartElementsOfSequence(previousItem, allChildren));
         } else {
           // Element or other item repeats itself
-          const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSibling);
+          const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSiblingName);
           if (repeatElement) validNext.push(repeatElement);
         }
       }
@@ -3181,19 +3173,19 @@ export class Schema {
   /**
    * Check if a sequence item (element, choice, group) contains the specified element
    * @param item The sequence item to check
-   * @param elementName The element name to look for
+   * @param element The element name to look for
    * @returns True if the item contains the element
    */
-  private itemContainsElement(item: Element, elementName: string, visited?: Set<Element>): boolean {
+  private itemContainsElement(item: Element, element: Element, visited?: Set<Element>): boolean {
     const ns = 'xs:';
     // Initialize visited set for cycle detection across recursive traversals
     if (!visited) visited = new Set<Element>();
 
     if (item.nodeName === ns + 'element') {
-      return item.getAttribute('name') === elementName;
+      return item === element;
     } else if (item.nodeName === ns + 'choice') {
       // Check if any element in the choice matches
-      return this.choiceContainsElement(item, elementName, visited);
+      return this.choiceContainsElement(item, element, visited);
     } else if (item.nodeName === ns + 'sequence') {
       if (visited.has(item)) return false;
       visited.add(item);
@@ -3201,7 +3193,7 @@ export class Schema {
       for (let i = 0; i < item.childNodes.length; i++) {
         const child = item.childNodes[i];
         if (child.nodeType === 1) {
-          if (this.itemContainsElement(child as Element, elementName, visited)) {
+          if (this.itemContainsElement(child as Element, element, visited)) {
             return true;
           }
         }
@@ -3216,7 +3208,7 @@ export class Schema {
       if (grp) {
         const model = this.findDirectContentModel(grp);
         if (model) {
-          return this.itemContainsElement(model, elementName, visited);
+          return this.itemContainsElement(model, element, visited);
         }
       }
     }
@@ -3227,7 +3219,7 @@ export class Schema {
   /**
    * Find a nested sequence within a choice that contains the specified element
    */
-  private findNestedSequenceContainingElement(root: Element, elementName: string): Element | null {
+  private findNestedSequenceContainingElement(root: Element, elementItem: Element): Element | null {
     const ns = 'xs:';
     const stack: Element[] = [root];
     const visited = new Set<Element>();
@@ -3247,7 +3239,7 @@ export class Schema {
           const model = this.findDirectContentModel(grp);
           if (model) {
             // If resolved model is a sequence that contains the element, return it
-            if (model.nodeName === ns + 'sequence' && this.itemContainsElement(model, elementName)) {
+            if (model.nodeName === ns + 'sequence' && this.itemContainsElement(model, elementItem)) {
               return model;
             }
             // Otherwise, continue traversal within the resolved model
@@ -3258,7 +3250,7 @@ export class Schema {
       }
 
       // Direct sequence detection
-      if (node.nodeName === ns + 'sequence' && this.itemContainsElement(node, elementName)) {
+      if (node.nodeName === ns + 'sequence' && this.itemContainsElement(node, elementItem)) {
         return node;
       }
 
@@ -3277,10 +3269,10 @@ export class Schema {
   /**
    * Check if a choice contains the specified element
    * @param choice The choice element
-   * @param elementName The element name to look for
+   * @param elementItem The element name to look for
    * @returns True if the choice contains the element
    */
-  private choiceContainsElement(choice: Element, elementName: string, visited?: Set<Element>): boolean {
+  private choiceContainsElement(choice: Element, elementItem: Element, visited?: Set<Element>): boolean {
     const ns = 'xs:';
     // Initialize visited set for cycle detection across recursive traversals
     if (!visited) visited = new Set<Element>();
@@ -3292,16 +3284,16 @@ export class Schema {
       if (child.nodeType === 1) {
         const element = child as Element;
 
-        if (element.nodeName === ns + 'element' && element.getAttribute('name') === elementName) {
+        if (element.nodeName === ns + 'element' && element === elementItem) {
           return true;
         } else if (element.nodeName === ns + 'choice') {
-          if (this.choiceContainsElement(element, elementName, visited)) {
+          if (this.choiceContainsElement(element, elementItem, visited)) {
             return true;
           }
         } else if (element.nodeName === ns + 'sequence') {
           // A sequence can be an alternative in a choice (e.g., do_if/do_elseif/do_else)
           // Delegate to generic itemContainsElement to search within the sequence
-          if (this.itemContainsElement(element, elementName, visited)) {
+          if (this.itemContainsElement(element, elementItem, visited)) {
             return true;
           }
         } else if (element.nodeName === ns + 'group') {
@@ -3309,7 +3301,7 @@ export class Schema {
           const grp = groupName ? this.schemaIndex.groups[groupName] : element;
           if (grp) {
             const model = this.findDirectContentModel(grp);
-            if (model && this.itemContainsElement(model, elementName, visited)) {
+            if (model && this.itemContainsElement(model, elementItem, visited)) {
               return true;
             }
           }
