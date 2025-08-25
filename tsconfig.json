@@ -10,6 +10,8 @@
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "declarationMap": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "sourceMap": true
   },
   "include": [
