@@ -27,6 +27,7 @@ interface HierarchyCache {
   hierarchyLookups: Map<string, Element | null>;
   definitionReachability: Map<string, boolean>;
   attributeCache: WeakMap<Element, AttributeInfo[]>;
+  enhancedAttributesCache: WeakMap<Element, EnhancedAttributeInfo[]>;
   hierarchyValidation: Map<string, boolean>;
   elementDefinitionCache: Map<string, Element | undefined>; // New cache for getElementDefinition
   // Performance caches (not size-limited via ensureCacheSize):
@@ -47,6 +48,7 @@ type CacheStats = {
   hierarchyLookups: CacheCounter;
   definitionReachability: CacheCounter;
   attributeCache: CacheCounter;
+  enhancedAttributesCache: CacheCounter;
   hierarchyValidation: CacheCounter;
   elementDefinitionCache: CacheCounter;
   childElementsByDef: CacheCounter;
@@ -156,6 +158,7 @@ export class Schema {
       hierarchyLookups: new Map(),
       definitionReachability: new Map(),
       attributeCache: new WeakMap<Element, AttributeInfo[]>(),
+      enhancedAttributesCache: new WeakMap<Element, EnhancedAttributeInfo[]>(),
       hierarchyValidation: new Map(),
       elementDefinitionCache: new Map(),
       childElementsByDef: new WeakMap<Element, Element[]>(),
@@ -176,6 +179,7 @@ export class Schema {
       hierarchyLookups: zero(),
       definitionReachability: zero(),
       attributeCache: zero(),
+      enhancedAttributesCache: zero(),
       hierarchyValidation: zero(),
       elementDefinitionCache: zero(),
       childElementsByDef: zero(),
@@ -1453,32 +1457,34 @@ export class Schema {
   /**
    * Get enhanced attribute information including type and validation details
    */
-  public getElementAttributes(elementName: string, hierarchy: string[] = []): AttributeInfo[] {
+  public getElementAttributes(elementName: string, hierarchy: string[] = [], element?: Element): AttributeInfo[] {
     const __profiling = this.shouldProfileMethods;
     const __t0 = __profiling ? this.profStart() : 0;
     try {
       const attributes: Record<string, Element> = {};
 
-      // Get the correct element definition based on hierarchical context
-      const def = this.getElementDefinition(elementName, hierarchy);
-      if (!def) {
-        // Cache empty result
-        return [];
+      if (!element) {
+        // Get the correct element definition based on hierarchical context
+        element = this.getElementDefinition(elementName, hierarchy);
+        if (!element) {
+          // Cache empty result
+          return [];
+        }
       }
 
       const cache = this.cache.attributeCache;
-      if (cache.has(def)) {
+      if (cache.has(element)) {
         if (this.shouldProfileCaches) this.cacheStats.attributeCache.hits++;
-        return cache.get(def)!;
+        return cache.get(element)!;
       }
       if (this.shouldProfileCaches) this.cacheStats.attributeCache.misses++;
 
       // Collect attributes from the element definition
-      this.collectAttrs(def, attributes);
+      this.collectAttrs(element, attributes);
 
       const result = Object.entries(attributes).map(([name, node]) => ({ name, node }));
 
-      cache.set(def, result);
+      cache.set(element, result);
       if (this.shouldProfileCaches) this.cacheStats.attributeCache.sets++;
 
       return result;
@@ -1598,10 +1604,21 @@ export class Schema {
     const __profiling = this.shouldProfileMethods;
     const __t0 = __profiling ? this.profStart() : 0;
     try {
-      const attributes = this.getElementAttributes(elementName, hierarchy);
+
+      const element = this.getElementDefinition(elementName, hierarchy);
+      if (!element) return [];
+
+      const cache = this.cache.enhancedAttributesCache;
+      if (cache.has(element)) {
+        if (this.shouldProfileCaches) this.cacheStats.enhancedAttributesCache.hits++;
+        return cache.get(element)!;
+      }
+      if (this.shouldProfileCaches) this.cacheStats.enhancedAttributesCache.misses++;
+
+      const attributes = this.getElementAttributes(elementName, hierarchy, element);
 
       // Enhance each attribute with type information
-      return attributes.map(attr => {
+      const enhancedAttributes = attributes.map(attr => {
         const enhancedAttr: EnhancedAttributeInfo = {
           name: attr.name,
           type: attr.node.getAttribute('type') || undefined,
@@ -1634,6 +1651,9 @@ export class Schema {
 
         return enhancedAttr;
       });
+      cache.set(element, enhancedAttributes);
+      if (this.shouldProfileCaches) this.cacheStats.enhancedAttributesCache.sets++;
+      return enhancedAttributes;
     } finally {
       if (__profiling) this.profEnd('getElementAttributesWithTypes', __t0);
     }
