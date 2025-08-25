@@ -110,6 +110,7 @@ export class Schema {
   private elementMap: Record<string, ElementMapEntry[]>;
   private cache!: HierarchyCache;
   private cacheStats!: CacheStats;
+  private methodTimings: Record<string, number> = {};
   private maxCacheSize: number = 100000;
   private shouldProfileCaches: boolean = false;
   constructor(xsdFilePath: string, includeFiles: string[] = []) {
@@ -189,6 +190,29 @@ export class Schema {
       fmt('modelNextNamesCache', this.cacheStats.modelNextNamesCache),
       fmt('containsCache', this.cacheStats.containsCache)
     );
+    // eslint-disable-next-line no-console
+    console.log(lines.join('\n'));
+  }
+
+  // Method timing profiling
+  private shouldProfileTimings(): boolean {
+    return ((process.env.XSDL_PROFILE_TIMINGS || '').trim() === '1');
+  }
+  private profStart(): number { return (globalThis.performance?.now?.() ?? Date.now()); }
+  private profEnd(method: string, t0: number): void {
+    if (!this.shouldProfileTimings()) return;
+    const t1 = (globalThis.performance?.now?.() ?? Date.now());
+    const dt = t1 - t0;
+    this.methodTimings[method] = (this.methodTimings[method] || 0) + dt;
+  }
+  private printMethodStats(): void {
+    if (!this.shouldProfileTimings()) return;
+    const entries = Object.entries(this.methodTimings).sort((a, b) => b[1] - a[1]);
+    const lines: string[] = [];
+    lines.push(`=== XSD-Lookup Method Timings for "${this.name}" (total ms) ===`);
+    for (const [name, total] of entries) {
+      lines.push(`${name}: ${total.toFixed(3)}ms`);
+    }
     // eslint-disable-next-line no-console
     console.log(lines.join('\n'));
   }
@@ -786,96 +810,101 @@ export class Schema {
   }
 
   public getElementDefinition(elementName: string, hierarchy: string[] = []): Element | undefined {
-    // Create cache key from element name and hierarchy
-    const hierarchyKey = hierarchy.length > 0 ? hierarchy.join('|') : '';
-    const fullCacheKey = `${elementName}::${hierarchyKey}`;
+    const __t0 = this.profStart();
+    try {
+      // Create cache key from element name and hierarchy
+      const hierarchyKey = hierarchy.length > 0 ? hierarchy.join('|') : '';
+      const fullCacheKey = `${elementName}::${hierarchyKey}`;
 
-    // Check if we have an exact match in cache
-    if (this.cache.elementDefinitionCache.has(fullCacheKey)) {
-      if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.hits++;
-      const cached = this.cache.elementDefinitionCache.get(fullCacheKey);
-      if (cached) this.enrichElementAnnotationFromTypeIfMissing(cached);
-      return cached;
-    }
-    if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.misses++;
-    const elementsFromMap = this.elementMap[elementName];
-    if (elementsFromMap && elementsFromMap.length === 1) {
-      const elementFromMap = elementsFromMap[0].node;
-      this.cache.elementDefinitionCache.set(fullCacheKey, elementFromMap);
+      // Check if we have an exact match in cache
+      if (this.cache.elementDefinitionCache.has(fullCacheKey)) {
+        if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.hits++;
+        const cached = this.cache.elementDefinitionCache.get(fullCacheKey);
+        if (cached) this.enrichElementAnnotationFromTypeIfMissing(cached);
+        return cached;
+      }
+      if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.misses++;
+      const elementsFromMap = this.elementMap[elementName];
+      if (elementsFromMap && elementsFromMap.length === 1) {
+        const elementFromMap = elementsFromMap[0].node;
+        this.cache.elementDefinitionCache.set(fullCacheKey, elementFromMap);
+        if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.sets++;
+        this.ensureCacheSize();
+        this.enrichElementAnnotationFromTypeIfMissing(elementFromMap);
+        return elementFromMap;
+      }
+
+      // Check for partial matches in cache - look for any cached key that starts with our element name
+      // and has a hierarchy that our current hierarchy extends
+      if (hierarchy.length > 0) {
+        let keyPrefix = '';
+        for (const segment of hierarchy) {
+          keyPrefix += `|${segment}`;
+          const fullKey = `${elementName}::${keyPrefix}`;
+          const cachedElement = this.cache.elementDefinitionCache.get(fullKey);
+          if (cachedElement) {
+            if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.hits++;
+            this.cache.elementDefinitionCache.set(fullCacheKey, cachedElement);
+            if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.sets++;
+            this.ensureCacheSize();
+            this.enrichElementAnnotationFromTypeIfMissing(cachedElement);
+            return cachedElement;
+          }
+        }
+      }
+
+      // No cache hit, perform the actual search
+
+      let result: Element | undefined;
+
+      // Step 1: If no hierarchy provided, only return global elements
+      if (hierarchy.length === 0) {
+        // Look for global elements (direct children of schema root)
+        const globalElements = this.getGlobalElementDefinitions(elementName);
+        result = globalElements.length > 0 ? globalElements[0] : undefined;
+      } else {
+        // Step 2: INCREMENTAL HIERARCHY APPROACH
+        // hierarchy = [immediate_parent, grandparent, great_grandparent, ...]
+        // Try each level incrementally: bottom-up expansion, then top-down search
+
+        for (let level = 1; level <= hierarchy.length; level++) {
+          // Take the first 'level' elements from hierarchy (bottom-up expansion)
+          const currentHierarchy = hierarchy.slice(0, level);
+
+          // Reverse for top-down search: [great_grandparent, ..., grandparent, immediate_parent]
+          const topDownHierarchy = [...currentHierarchy].reverse();
+
+          // Try to find element with this hierarchy level using top-down search
+          const foundElement = this.findElementTopDown(elementName, topDownHierarchy);
+
+          if (foundElement) {
+            // Found a definition at this level
+            result = foundElement;
+
+            // Cache this intermediate result too (it might be useful for future lookups)
+            const intermediateCacheKey = `${elementName}::${currentHierarchy.join('|')}`;
+            this.cache.elementDefinitionCache.set(intermediateCacheKey, result);
+            if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.sets++;
+
+            break; // Exit the loop since we found a match
+          }
+        }
+      }
+
+      // If found, enrich with annotation structure from referenced type when missing
+      if (result) {
+        this.enrichElementAnnotationFromTypeIfMissing(result);
+      }
+
+      // Cache the final result (even if undefined)
+      this.cache.elementDefinitionCache.set(fullCacheKey, result);
       if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.sets++;
       this.ensureCacheSize();
-      this.enrichElementAnnotationFromTypeIfMissing(elementFromMap);
-      return elementFromMap;
+
+      return result;
+    } finally {
+      this.profEnd('getElementDefinition', __t0);
     }
-
-    // Check for partial matches in cache - look for any cached key that starts with our element name
-    // and has a hierarchy that our current hierarchy extends
-    if (hierarchy.length > 0) {
-      let keyPrefix = '';
-      for (const segment of hierarchy) {
-        keyPrefix += `|${segment}`;
-        const fullKey = `${elementName}::${keyPrefix}`;
-        const cachedElement = this.cache.elementDefinitionCache.get(fullKey);
-        if (cachedElement) {
-          if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.hits++;
-          this.cache.elementDefinitionCache.set(fullCacheKey, cachedElement);
-          if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.sets++;
-          this.ensureCacheSize();
-          this.enrichElementAnnotationFromTypeIfMissing(cachedElement);
-          return cachedElement;
-        }
-      }
-    }
-
-    // No cache hit, perform the actual search
-
-    let result: Element | undefined;
-
-    // Step 1: If no hierarchy provided, only return global elements
-    if (hierarchy.length === 0) {
-      // Look for global elements (direct children of schema root)
-      const globalElements = this.getGlobalElementDefinitions(elementName);
-      result = globalElements.length > 0 ? globalElements[0] : undefined;
-    } else {
-      // Step 2: INCREMENTAL HIERARCHY APPROACH
-      // hierarchy = [immediate_parent, grandparent, great_grandparent, ...]
-      // Try each level incrementally: bottom-up expansion, then top-down search
-
-      for (let level = 1; level <= hierarchy.length; level++) {
-        // Take the first 'level' elements from hierarchy (bottom-up expansion)
-        const currentHierarchy = hierarchy.slice(0, level);
-
-        // Reverse for top-down search: [great_grandparent, ..., grandparent, immediate_parent]
-        const topDownHierarchy = [...currentHierarchy].reverse();
-
-        // Try to find element with this hierarchy level using top-down search
-        const foundElement = this.findElementTopDown(elementName, topDownHierarchy);
-
-        if (foundElement) {
-          // Found a definition at this level
-          result = foundElement;
-
-          // Cache this intermediate result too (it might be useful for future lookups)
-          const intermediateCacheKey = `${elementName}::${currentHierarchy.join('|')}`;
-          this.cache.elementDefinitionCache.set(intermediateCacheKey, result);
-          if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.sets++;
-
-          break; // Exit the loop since we found a match
-        }
-      }
-    }
-
-    // If found, enrich with annotation structure from referenced type when missing
-    if (result) {
-      this.enrichElementAnnotationFromTypeIfMissing(result);
-    }
-
-    // Cache the final result (even if undefined)
-    this.cache.elementDefinitionCache.set(fullCacheKey, result);
-    if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.sets++;
-    this.ensureCacheSize();
-
-    return result;
   }
 
   // Clone xs:annotation/xs:documentation from the referenced type onto the element
@@ -1219,30 +1248,35 @@ export class Schema {
    * Get enhanced attribute information including type and validation details
    */
   public getElementAttributes(elementName: string, hierarchy: string[] = []): AttributeInfo[] {
-    // STRICT HIERARCHY RULE: If hierarchy provided, only search in hierarchy context
-    // Never fall back to global elements when hierarchy is specified
+    const __t0 = this.profStart();
+    try {
+      // STRICT HIERARCHY RULE: If hierarchy provided, only search in hierarchy context
+      // Never fall back to global elements when hierarchy is specified
 
-    // If no hierarchy provided, only search global elements
-    if (hierarchy.length === 0) {
-      return this.getElementAttributesWithHierarchy(elementName, []);
+      // If no hierarchy provided, only search global elements
+      if (hierarchy.length === 0) {
+        return this.getElementAttributesWithHierarchy(elementName, []);
+      }
+
+      // Step 1: Use progressive hierarchy search to find attributes
+      // Stop as soon as we find any attributes at any depth
+      // for (let contextDepth = 1; contextDepth <= hierarchy.length; contextDepth++) {
+      //   // Take the first contextDepth elements (immediate context)
+      //   const currentContext = hierarchy.slice(0, contextDepth);
+
+      // const contextAttrs = this.getElementAttributesWithHierarchy(elementName, currentContext);
+      const contextAttrs = this.getElementAttributesWithHierarchy(elementName, hierarchy);
+      if (contextAttrs.length > 0) {
+        // Found attributes at this depth - return them immediately
+        return contextAttrs;
+      }
+      // }
+
+      // No attributes found at any depth - do NOT fall back to global search
+      return [];
+    } finally {
+      this.profEnd('getElementAttributes', __t0);
     }
-
-    // Step 1: Use progressive hierarchy search to find attributes
-    // Stop as soon as we find any attributes at any depth
-    // for (let contextDepth = 1; contextDepth <= hierarchy.length; contextDepth++) {
-    //   // Take the first contextDepth elements (immediate context)
-    //   const currentContext = hierarchy.slice(0, contextDepth);
-
-    // const contextAttrs = this.getElementAttributesWithHierarchy(elementName, currentContext);
-    const contextAttrs = this.getElementAttributesWithHierarchy(elementName, hierarchy);
-    if (contextAttrs.length > 0) {
-      // Found attributes at this depth - return them immediately
-      return contextAttrs;
-    }
-    // }
-
-    // No attributes found at any depth - do NOT fall back to global search
-    return [];
   }
 
   /**
@@ -1252,39 +1286,44 @@ export class Schema {
    * @returns Array of attribute information
    */
   private getElementAttributesWithHierarchy(elementName: string, hierarchy: string[]): AttributeInfo[] {
-    // Create cache key
-    const cacheKey = `attrs:${elementName}:${hierarchy.join('>')}`;
+    const __t0 = this.profStart();
+    try {
+      // Create cache key
+      const cacheKey = `attrs:${elementName}:${hierarchy.join('>')}`;
 
-    // Check cache first
-    if (this.cache.attributeCache.has(cacheKey)) {
-      return this.cache.attributeCache.get(cacheKey)!;
-    }
+      // Check cache first
+      if (this.cache.attributeCache.has(cacheKey)) {
+        return this.cache.attributeCache.get(cacheKey)!;
+      }
 
-    const attributes: Record<string, Element> = {};
+      const attributes: Record<string, Element> = {};
 
-    // Get the correct element definition based on hierarchical context
-    const def = this.getElementDefinition(elementName, hierarchy);
-    if (!def) {
-      // Cache empty result
-      const emptyResult: AttributeInfo[] = [];
-      this.cache.attributeCache.set(cacheKey, emptyResult);
+      // Get the correct element definition based on hierarchical context
+      const def = this.getElementDefinition(elementName, hierarchy);
+      if (!def) {
+        // Cache empty result
+        const emptyResult: AttributeInfo[] = [];
+        this.cache.attributeCache.set(cacheKey, emptyResult);
+        this.ensureCacheSize();
+        return emptyResult;
+      }
+
+      // Use the definition
+      const bestDef = def;
+
+      // Collect attributes from the element definition
+      this.collectAttrs(bestDef, attributes);
+
+      const result = Object.entries(attributes).map(([name, node]) => ({ name, node }));
+
+      // Cache the result
+      this.cache.attributeCache.set(cacheKey, result);
       this.ensureCacheSize();
-      return emptyResult;
+
+      return result;
+    } finally {
+      this.profEnd('getElementAttributesWithHierarchy', __t0);
     }
-
-    // Use the definition
-    const bestDef = def;
-
-    // Collect attributes from the element definition
-    this.collectAttrs(bestDef, attributes);
-
-    const result = Object.entries(attributes).map(([name, node]) => ({ name, node }));
-
-    // Cache the result
-    this.cache.attributeCache.set(cacheKey, result);
-    this.ensureCacheSize();
-
-    return result;
   }
 
   /**
@@ -1387,253 +1426,273 @@ export class Schema {
    * Get enhanced attribute information including type and validation details
    */
   public getElementAttributesWithTypes(elementName: string, hierarchy: string[] = []): EnhancedAttributeInfo[] {
-    const attributes = this.getElementAttributes(elementName, hierarchy);
+    const __t0 = this.profStart();
+    try {
+      const attributes = this.getElementAttributes(elementName, hierarchy);
 
-    // Enhance each attribute with type information
-    return attributes.map(attr => {
-      const enhancedAttr: EnhancedAttributeInfo = {
-        name: attr.name,
-        type: attr.node.getAttribute('type') || undefined,
-        required: attr.node.getAttribute('use') === 'required'
-      };
+      // Enhance each attribute with type information
+      return attributes.map(attr => {
+        const enhancedAttr: EnhancedAttributeInfo = {
+          name: attr.name,
+          type: attr.node.getAttribute('type') || undefined,
+          required: attr.node.getAttribute('use') === 'required'
+        };
 
-      // Get element location information
-      enhancedAttr.location = Schema.getElementLocation(attr.node);
+        // Get element location information
+        enhancedAttr.location = Schema.getElementLocation(attr.node);
 
-      // Extract attribute's own annotation
-      const annotation = Schema.extractAnnotationText(attr.node);
-      if (annotation) {
-        enhancedAttr.annotation = annotation;
-      }
-
-      // If the attribute has a type reference, get comprehensive validation information
-      if (enhancedAttr.type) {
-        const typeValidation = this.getTypeValidationInfo(enhancedAttr.type);
-        Object.assign(enhancedAttr, typeValidation);
-      } else {
-        // Check for inline type definition (xs:simpleType)
-        const inlineTypeValidation = this.getInlineTypeValidationInfo(attr.node);
-        Object.assign(enhancedAttr, inlineTypeValidation);
-
-        // If we found inline enumeration values, set the type to indicate it's an enumeration
-        if (inlineTypeValidation.enumValues && inlineTypeValidation.enumValues.length > 0) {
-          enhancedAttr.type = 'enumeration';
+        // Extract attribute's own annotation
+        const annotation = Schema.extractAnnotationText(attr.node);
+        if (annotation) {
+          enhancedAttr.annotation = annotation;
         }
-      }
 
-      return enhancedAttr;
-    });
+        // If the attribute has a type reference, get comprehensive validation information
+        if (enhancedAttr.type) {
+          const typeValidation = this.getTypeValidationInfo(enhancedAttr.type);
+          Object.assign(enhancedAttr, typeValidation);
+        } else {
+          // Check for inline type definition (xs:simpleType)
+          const inlineTypeValidation = this.getInlineTypeValidationInfo(attr.node);
+          Object.assign(enhancedAttr, inlineTypeValidation);
+
+          // If we found inline enumeration values, set the type to indicate it's an enumeration
+          if (inlineTypeValidation.enumValues && inlineTypeValidation.enumValues.length > 0) {
+            enhancedAttr.type = 'enumeration';
+          }
+        }
+
+        return enhancedAttr;
+      });
+    } finally {
+      this.profEnd('getElementAttributesWithTypes', __t0);
+    }
   }
 
   /**
    * Get comprehensive validation information for a type
    */
   private getTypeValidationInfo(typeName: string): Partial<EnhancedAttributeInfo> {
-    const typeNode = this.schemaIndex.types[typeName];
-    if (!typeNode) return {};
+    const __t0 = this.profStart();
+    try {
+      const typeNode = this.schemaIndex.types[typeName];
+      if (!typeNode) return {};
 
-    const validationInfo: Partial<EnhancedAttributeInfo> = {};
-    const extractValidationRules = (node: Element): void => {
-      if (!node || node.nodeType !== 1) return;
+      const validationInfo: Partial<EnhancedAttributeInfo> = {};
+      const extractValidationRules = (node: Element): void => {
+        if (!node || node.nodeType !== 1) return;
 
-      // Use the reusable validation rule extraction
-      this.extractValidationRulesFromNode(node, validationInfo);
+        // Use the reusable validation rule extraction
+        this.extractValidationRulesFromNode(node, validationInfo);
 
-      // Handle inheritance: if this is a restriction with a base type, inherit from base
-      if (node.localName === 'restriction') {
-        const baseType = node.getAttribute('base');
-        if (baseType && baseType !== 'xs:string' && baseType.indexOf(':') === -1) {
-          // This is a user-defined base type, not a built-in XSD type
-          const baseInfo = this.getTypeValidationInfo(baseType);
-          // Merge base info into current info (current restrictions take precedence)
-          Object.assign(validationInfo, baseInfo, validationInfo);
+        // Handle inheritance: if this is a restriction with a base type, inherit from base
+        if (node.localName === 'restriction') {
+          const baseType = node.getAttribute('base');
+          if (baseType && baseType !== 'xs:string' && baseType.indexOf(':') === -1) {
+            // This is a user-defined base type, not a built-in XSD type
+            const baseInfo = this.getTypeValidationInfo(baseType);
+            // Merge base info into current info (current restrictions take precedence)
+            Object.assign(validationInfo, baseInfo, validationInfo);
+          }
         }
-      }
 
-      // Handle union types: collect validation info from all member types
-      if (node.localName === 'union') {
-        const memberTypes = node.getAttribute('memberTypes');
-        if (memberTypes) {
-          // Split memberTypes by whitespace to get individual type names
-          const typeNames = memberTypes.trim().split(/\s+/);
-          for (const memberTypeName of typeNames) {
-            if (memberTypeName) {
-              // Recursively get validation info for each member type
-              const memberInfo = this.getTypeValidationInfo(memberTypeName);
+        // Handle union types: collect validation info from all member types
+        if (node.localName === 'union') {
+          const memberTypes = node.getAttribute('memberTypes');
+          if (memberTypes) {
+            // Split memberTypes by whitespace to get individual type names
+            const typeNames = memberTypes.trim().split(/\s+/);
+            for (const memberTypeName of typeNames) {
+              if (memberTypeName) {
+                // Recursively get validation info for each member type
+                const memberInfo = this.getTypeValidationInfo(memberTypeName);
 
-              // Merge patterns (union means ANY pattern can match)
-              if (memberInfo.patterns) {
-                if (!validationInfo.patterns) validationInfo.patterns = [];
-                validationInfo.patterns.push(...memberInfo.patterns);
-              }
+                // Merge patterns (union means ANY pattern can match)
+                if (memberInfo.patterns) {
+                  if (!validationInfo.patterns) validationInfo.patterns = [];
+                  validationInfo.patterns.push(...memberInfo.patterns);
+                }
 
-              // Merge enumerations (union means ANY enum value is valid)
-              if (memberInfo.enumValues) {
-                if (!validationInfo.enumValues) validationInfo.enumValues = [];
-                validationInfo.enumValues.push(...memberInfo.enumValues);
-              }
+                // Merge enumerations (union means ANY enum value is valid)
+                if (memberInfo.enumValues) {
+                  if (!validationInfo.enumValues) validationInfo.enumValues = [];
+                  validationInfo.enumValues.push(...memberInfo.enumValues);
+                }
 
-              // For numeric restrictions, use the most permissive ranges
-              if (memberInfo.minInclusive !== undefined) {
-                validationInfo.minInclusive = validationInfo.minInclusive !== undefined
-                  ? Math.min(validationInfo.minInclusive, memberInfo.minInclusive)
-                  : memberInfo.minInclusive;
-              }
+                // For numeric restrictions, use the most permissive ranges
+                if (memberInfo.minInclusive !== undefined) {
+                  validationInfo.minInclusive = validationInfo.minInclusive !== undefined
+                    ? Math.min(validationInfo.minInclusive, memberInfo.minInclusive)
+                    : memberInfo.minInclusive;
+                }
 
-              if (memberInfo.maxInclusive !== undefined) {
-                validationInfo.maxInclusive = validationInfo.maxInclusive !== undefined
-                  ? Math.max(validationInfo.maxInclusive, memberInfo.maxInclusive)
-                  : memberInfo.maxInclusive;
-              }
+                if (memberInfo.maxInclusive !== undefined) {
+                  validationInfo.maxInclusive = validationInfo.maxInclusive !== undefined
+                    ? Math.max(validationInfo.maxInclusive, memberInfo.maxInclusive)
+                    : memberInfo.maxInclusive;
+                }
 
-              if (memberInfo.minExclusive !== undefined) {
-                validationInfo.minExclusive = validationInfo.minExclusive !== undefined
-                  ? Math.min(validationInfo.minExclusive, memberInfo.minExclusive)
-                  : memberInfo.minExclusive;
-              }
+                if (memberInfo.minExclusive !== undefined) {
+                  validationInfo.minExclusive = validationInfo.minExclusive !== undefined
+                    ? Math.min(validationInfo.minExclusive, memberInfo.minExclusive)
+                    : memberInfo.minExclusive;
+                }
 
-              if (memberInfo.maxExclusive !== undefined) {
-                validationInfo.maxExclusive = validationInfo.maxExclusive !== undefined
-                  ? Math.max(validationInfo.maxExclusive, memberInfo.maxExclusive)
-                  : memberInfo.maxExclusive;
-              }
+                if (memberInfo.maxExclusive !== undefined) {
+                  validationInfo.maxExclusive = validationInfo.maxExclusive !== undefined
+                    ? Math.max(validationInfo.maxExclusive, memberInfo.maxExclusive)
+                    : memberInfo.maxExclusive;
+                }
 
-              // For length restrictions, use the most permissive ranges
-              if (memberInfo.minLength !== undefined) {
-                validationInfo.minLength = validationInfo.minLength !== undefined
-                  ? Math.min(validationInfo.minLength, memberInfo.minLength)
-                  : memberInfo.minLength;
-              }
+                // For length restrictions, use the most permissive ranges
+                if (memberInfo.minLength !== undefined) {
+                  validationInfo.minLength = validationInfo.minLength !== undefined
+                    ? Math.min(validationInfo.minLength, memberInfo.minLength)
+                    : memberInfo.minLength;
+                }
 
-              if (memberInfo.maxLength !== undefined) {
-                validationInfo.maxLength = validationInfo.maxLength !== undefined
-                  ? Math.max(validationInfo.maxLength, memberInfo.maxLength)
-                  : memberInfo.maxLength;
+                if (memberInfo.maxLength !== undefined) {
+                  validationInfo.maxLength = validationInfo.maxLength !== undefined
+                    ? Math.max(validationInfo.maxLength, memberInfo.maxLength)
+                    : memberInfo.maxLength;
+                }
               }
             }
           }
         }
-      }
 
-      // Recursively search child nodes (but skip the base validation rules since we use extractValidationRulesFromNode now)
-      for (let i = 0; i < node.childNodes.length; i++) {
-        const child = node.childNodes[i];
-        if (child.nodeType === 1) {
-          extractValidationRules(child as Element);
+        // Recursively search child nodes (but skip the base validation rules since we use extractValidationRulesFromNode now)
+        for (let i = 0; i < node.childNodes.length; i++) {
+          const child = node.childNodes[i];
+          if (child.nodeType === 1) {
+            extractValidationRules(child as Element);
+          }
         }
+      };
+
+      extractValidationRules(typeNode);
+
+      // Extract enum value annotations if we have enumeration values
+      if (validationInfo.enumValues && validationInfo.enumValues.length > 0) {
+        validationInfo.enumValuesAnnotations = this.extractEnumValueAnnotations(typeNode);
       }
-    };
 
-    extractValidationRules(typeNode);
-
-    // Extract enum value annotations if we have enumeration values
-    if (validationInfo.enumValues && validationInfo.enumValues.length > 0) {
-      validationInfo.enumValuesAnnotations = this.extractEnumValueAnnotations(typeNode);
+      return validationInfo;
+    } finally {
+      this.profEnd('getTypeValidationInfo', __t0);
     }
-
-    return validationInfo;
   }
 
   /**
    * Get validation information from inline type definitions (xs:simpleType within attribute)
    */
   private getInlineTypeValidationInfo(attributeNode: Element): Partial<EnhancedAttributeInfo> {
-    const validationInfo: Partial<EnhancedAttributeInfo> = {};
-    // Look for inline xs:simpleType definition within the attribute node
-    for (let i = 0; i < attributeNode.childNodes.length; i++) {
-      const child = attributeNode.childNodes[i];
-      if (child.nodeType === 1 && (child as Element).localName === 'simpleType') {
-        const simpleTypeNode = child as Element;
+    const __t0 = this.profStart();
+    try {
+      const validationInfo: Partial<EnhancedAttributeInfo> = {};
+      // Look for inline xs:simpleType definition within the attribute node
+      for (let i = 0; i < attributeNode.childNodes.length; i++) {
+        const child = attributeNode.childNodes[i];
+        if (child.nodeType === 1 && (child as Element).localName === 'simpleType') {
+          const simpleTypeNode = child as Element;
 
-        // Extract validation rules from the inline simpleType
-        this.extractValidationRulesFromNode(simpleTypeNode, validationInfo);
+          // Extract validation rules from the inline simpleType
+          this.extractValidationRulesFromNode(simpleTypeNode, validationInfo);
 
-        // Extract enum value annotations if we have enumeration values
-        if (validationInfo.enumValues && validationInfo.enumValues.length > 0) {
-          validationInfo.enumValuesAnnotations = this.extractEnumValueAnnotations(simpleTypeNode);
+          // Extract enum value annotations if we have enumeration values
+          if (validationInfo.enumValues && validationInfo.enumValues.length > 0) {
+            validationInfo.enumValuesAnnotations = this.extractEnumValueAnnotations(simpleTypeNode);
+          }
+
+          break; // Found the simpleType, no need to continue
         }
-
-        break; // Found the simpleType, no need to continue
       }
-    }
 
-    return validationInfo;
+      return validationInfo;
+    } finally {
+      this.profEnd('getInlineTypeValidationInfo', __t0);
+    }
   }
 
   /**
    * Extract validation rules from a node (reusable logic)
    */
   private extractValidationRulesFromNode(node: Element, validationInfo: Partial<EnhancedAttributeInfo>): void {
-    if (!node || node.nodeType !== 1) return;
+    const __t0 = this.profStart();
+    try {
+      if (!node || node.nodeType !== 1) return;
 
-    // Extract enumeration values
-    if (node.localName === 'enumeration') {
-      const value = node.getAttribute('value');
-      if (value) {
-        if (!validationInfo.enumValues) validationInfo.enumValues = [];
-        validationInfo.enumValues.push(value);
+      // Extract enumeration values
+      if (node.localName === 'enumeration') {
+        const value = node.getAttribute('value');
+        if (value) {
+          if (!validationInfo.enumValues) validationInfo.enumValues = [];
+          validationInfo.enumValues.push(value);
+        }
       }
-    }
 
-    // Extract pattern restrictions
-    if (node.localName === 'pattern') {
-      const pattern = node.getAttribute('value');
-      if (pattern) {
-        if (!validationInfo.patterns) validationInfo.patterns = [];
-        validationInfo.patterns.push(pattern);
+      // Extract pattern restrictions
+      if (node.localName === 'pattern') {
+        const pattern = node.getAttribute('value');
+        if (pattern) {
+          if (!validationInfo.patterns) validationInfo.patterns = [];
+          validationInfo.patterns.push(pattern);
+        }
       }
-    }
 
-    // Extract length restrictions
-    if (node.localName === 'minLength') {
-      const minLength = parseInt(node.getAttribute('value') || '0', 10);
-      if (!isNaN(minLength)) {
-        validationInfo.minLength = minLength;
+      // Extract length restrictions
+      if (node.localName === 'minLength') {
+        const minLength = parseInt(node.getAttribute('value') || '0', 10);
+        if (!isNaN(minLength)) {
+          validationInfo.minLength = minLength;
+        }
       }
-    }
 
-    if (node.localName === 'maxLength') {
-      const maxLength = parseInt(node.getAttribute('value') || '0', 10);
-      if (!isNaN(maxLength)) {
-        validationInfo.maxLength = maxLength;
+      if (node.localName === 'maxLength') {
+        const maxLength = parseInt(node.getAttribute('value') || '0', 10);
+        if (!isNaN(maxLength)) {
+          validationInfo.maxLength = maxLength;
+        }
       }
-    }
 
-    // Extract numeric range restrictions
-    if (node.localName === 'minInclusive') {
-      const minInclusive = parseFloat(node.getAttribute('value') || '0');
-      if (!isNaN(minInclusive)) {
-        validationInfo.minInclusive = minInclusive;
+      // Extract numeric range restrictions
+      if (node.localName === 'minInclusive') {
+        const minInclusive = parseFloat(node.getAttribute('value') || '0');
+        if (!isNaN(minInclusive)) {
+          validationInfo.minInclusive = minInclusive;
+        }
       }
-    }
 
-    if (node.localName === 'maxInclusive') {
-      const maxInclusive = parseFloat(node.getAttribute('value') || '0');
-      if (!isNaN(maxInclusive)) {
-        validationInfo.maxInclusive = maxInclusive;
+      if (node.localName === 'maxInclusive') {
+        const maxInclusive = parseFloat(node.getAttribute('value') || '0');
+        if (!isNaN(maxInclusive)) {
+          validationInfo.maxInclusive = maxInclusive;
+        }
       }
-    }
 
-    if (node.localName === 'minExclusive') {
-      const minExclusive = parseFloat(node.getAttribute('value') || '0');
-      if (!isNaN(minExclusive)) {
-        validationInfo.minExclusive = minExclusive;
+      if (node.localName === 'minExclusive') {
+        const minExclusive = parseFloat(node.getAttribute('value') || '0');
+        if (!isNaN(minExclusive)) {
+          validationInfo.minExclusive = minExclusive;
+        }
       }
-    }
 
-    if (node.localName === 'maxExclusive') {
-      const maxExclusive = parseFloat(node.getAttribute('value') || '0');
-      if (!isNaN(maxExclusive)) {
-        validationInfo.maxExclusive = maxExclusive;
+      if (node.localName === 'maxExclusive') {
+        const maxExclusive = parseFloat(node.getAttribute('value') || '0');
+        if (!isNaN(maxExclusive)) {
+          validationInfo.maxExclusive = maxExclusive;
+        }
       }
-    }
 
-    // Recursively search child nodes for validation rules (but not inheritance/union logic)
-    for (let i = 0; i < node.childNodes.length; i++) {
-      const child = node.childNodes[i];
-      if (child.nodeType === 1) {
-        this.extractValidationRulesFromNode(child as Element, validationInfo);
+      // Recursively search child nodes for validation rules (but not inheritance/union logic)
+      for (let i = 0; i < node.childNodes.length; i++) {
+        const child = node.childNodes[i];
+        if (child.nodeType === 1) {
+          this.extractValidationRulesFromNode(child as Element, validationInfo);
+        }
       }
+    } finally {
+      this.profEnd('extractValidationRulesFromNode', __t0);
     }
   }
 
@@ -1641,23 +1700,28 @@ export class Schema {
    * Validate an attribute value against its XSD definition
    */
   public validateAttributeValue(elementName: string, attributeName: string, attributeValue: string, hierarchy: string[] = []): AttributeValidationResult {
-    const attributes = this.getElementAttributesWithTypes(elementName, hierarchy);
-    const attrInfo = attributes.find(attr => attr.name === attributeName);
+    const __t0 = this.profStart();
+    try {
+      const attributes = this.getElementAttributesWithTypes(elementName, hierarchy);
+      const attrInfo = attributes.find(attr => attr.name === attributeName);
 
-    if (!attrInfo) {
-      return {
-        isValid: false,
-        errorMessage: `Attribute '${attributeName}' not found for element '${elementName}'`
-      };
+      if (!attrInfo) {
+        return {
+          isValid: false,
+          errorMessage: `Attribute '${attributeName}' not found for element '${elementName}'`
+        };
+      }
+
+      // If no type specified, it's valid (any string)
+      if (!attrInfo.type) {
+        return { isValid: true };
+      }
+
+      // Comprehensive validation using all available restrictions
+      return this.validateValueWithRestrictions(attributeValue, attrInfo);
+    } finally {
+      this.profEnd('validateAttributeValue', __t0);
     }
-
-    // If no type specified, it's valid (any string)
-    if (!attrInfo.type) {
-      return { isValid: true };
-    }
-
-    // Comprehensive validation using all available restrictions
-    return this.validateValueWithRestrictions(attributeValue, attrInfo);
   }
 
   /**
@@ -1681,163 +1745,168 @@ export class Schema {
    * Validate a value against all possible XSD restrictions
    */
   private validateValueWithRestrictions(value: string, attrInfo: EnhancedAttributeInfo): AttributeValidationResult {
-    // Normalize the value for validation (join multi-line content)
-    const normalizedValue = this.normalizeAttributeValue(value);
+    const __t0 = this.profStart();
+    try {
+      // Normalize the value for validation (join multi-line content)
+      const normalizedValue = this.normalizeAttributeValue(value);
 
-    const restrictions: string[] = [];
+      const restrictions: string[] = [];
 
-    // For union types, we need to check if the value matches ANY of the validation rules
-    // Priority: enumerations first (more specific), then patterns (more general)
+      // For union types, we need to check if the value matches ANY of the validation rules
+      // Priority: enumerations first (more specific), then patterns (more general)
 
-    // 1. Check enumeration validation first (highest priority for union types)
-    if (attrInfo.enumValues && attrInfo.enumValues.length > 0) {
-      const enumValidationPassed = attrInfo.enumValues.includes(normalizedValue);
-      if (enumValidationPassed) {
-        // If enum validation passes, we're done - enums take precedence
-        return {
-          isValid: true,
-          expectedType: attrInfo.type,
-          allowedValues: attrInfo.enumValues
-        };
-      }
-      // Enum validation failed, but continue to check patterns for union types
-      // If there are no patterns, this will fail at the end with enum-only error
-    }    // 2. If enum validation failed or no enums present, check pattern validation
-    if (attrInfo.patterns && attrInfo.patterns.length > 0) {
-      const validPatterns: string[] = [];
+      // 1. Check enumeration validation first (highest priority for union types)
+      if (attrInfo.enumValues && attrInfo.enumValues.length > 0) {
+        const enumValidationPassed = attrInfo.enumValues.includes(normalizedValue);
+        if (enumValidationPassed) {
+          // If enum validation passes, we're done - enums take precedence
+          return {
+            isValid: true,
+            expectedType: attrInfo.type,
+            allowedValues: attrInfo.enumValues
+          };
+        }
+        // Enum validation failed, but continue to check patterns for union types
+        // If there are no patterns, this will fail at the end with enum-only error
+      }    // 2. If enum validation failed or no enums present, check pattern validation
+      if (attrInfo.patterns && attrInfo.patterns.length > 0) {
+        const validPatterns: string[] = [];
 
-      for (const pattern of attrInfo.patterns) {
-        try {
-          // Anchor the pattern to match the entire string (if not already anchored)
-          let fullPattern = pattern;
-          if (!pattern.startsWith('^')) {
-            fullPattern = '^' + pattern;
+        for (const pattern of attrInfo.patterns) {
+          try {
+            // Anchor the pattern to match the entire string (if not already anchored)
+            let fullPattern = pattern;
+            if (!pattern.startsWith('^')) {
+              fullPattern = '^' + pattern;
+            }
+            if (!pattern.endsWith('$')) {
+              fullPattern = fullPattern + '$';
+            }
+
+            const regex = new RegExp(fullPattern);
+            validPatterns.push(pattern);
+            if (regex.test(normalizedValue)) {
+              // Pattern validation passed - this is valid for union types
+              return {
+                isValid: true,
+                expectedType: attrInfo.type,
+                restrictions: validPatterns.map(p => `Pattern: ${p}`)
+              };
+            }
+          } catch (e) {
+            // Invalid regex pattern in XSD - skip this pattern
+            restrictions.push(`Pattern validation skipped (invalid regex: ${pattern})`);
           }
-          if (!pattern.endsWith('$')) {
-            fullPattern = fullPattern + '$';
-          }
+        }
 
-          const regex = new RegExp(fullPattern);
-          validPatterns.push(pattern);
-          if (regex.test(normalizedValue)) {
-            // Pattern validation passed - this is valid for union types
-            return {
-              isValid: true,
-              expectedType: attrInfo.type,
-              restrictions: validPatterns.map(p => `Pattern: ${p}`)
-            };
-          }
-        } catch (e) {
-          // Invalid regex pattern in XSD - skip this pattern
-          restrictions.push(`Pattern validation skipped (invalid regex: ${pattern})`);
+        // If we reach here, neither enums nor patterns matched
+        if (attrInfo.enumValues && attrInfo.enumValues.length > 0) {
+          // We have both enums and patterns, but neither matched
+          const displayValue = value === normalizedValue ? value : `${value} (normalized: ${normalizedValue})`;
+          return {
+            isValid: false,
+            expectedType: attrInfo.type,
+            allowedValues: attrInfo.enumValues,
+            restrictions: validPatterns.map(p => `Pattern: ${p}`),
+            errorMessage: `Value '${displayValue}' does not match any allowed enumerations or patterns. Expected one of: ${attrInfo.enumValues.join(', ')} OR a value matching patterns: ${validPatterns.join(' OR ')}`
+          };
+        } else {
+          // Only patterns available, but none matched
+          const displayValue = value === normalizedValue ? value : `${value} (normalized: ${normalizedValue})`;
+          return {
+            isValid: false,
+            expectedType: attrInfo.type,
+            restrictions: validPatterns.map(p => `Pattern: ${p}`),
+            errorMessage: `Value '${displayValue}' does not match any of the required patterns: ${validPatterns.join(' OR ')}`
+          };
         }
       }
 
-      // If we reach here, neither enums nor patterns matched
-      if (attrInfo.enumValues && attrInfo.enumValues.length > 0) {
-        // We have both enums and patterns, but neither matched
+      // 3. If we have enums but no patterns, and enum validation failed, return error
+      if (attrInfo.enumValues && attrInfo.enumValues.length > 0 &&
+        (!attrInfo.patterns || attrInfo.patterns.length === 0)) {
         const displayValue = value === normalizedValue ? value : `${value} (normalized: ${normalizedValue})`;
         return {
           isValid: false,
           expectedType: attrInfo.type,
           allowedValues: attrInfo.enumValues,
-          restrictions: validPatterns.map(p => `Pattern: ${p}`),
-          errorMessage: `Value '${displayValue}' does not match any allowed enumerations or patterns. Expected one of: ${attrInfo.enumValues.join(', ')} OR a value matching patterns: ${validPatterns.join(' OR ')}`
+          errorMessage: `Value '${displayValue}' is not allowed. Expected one of: ${attrInfo.enumValues.join(', ')}`
         };
-      } else {
-        // Only patterns available, but none matched
+      }
+
+      // 4. Length restrictions
+      if (attrInfo.minLength !== undefined && normalizedValue.length < attrInfo.minLength) {
         const displayValue = value === normalizedValue ? value : `${value} (normalized: ${normalizedValue})`;
         return {
           isValid: false,
           expectedType: attrInfo.type,
-          restrictions: validPatterns.map(p => `Pattern: ${p}`),
-          errorMessage: `Value '${displayValue}' does not match any of the required patterns: ${validPatterns.join(' OR ')}`
+          errorMessage: `Value '${displayValue}' is too short. Minimum length: ${attrInfo.minLength}, actual: ${normalizedValue.length}`
         };
       }
-    }
 
-    // 3. If we have enums but no patterns, and enum validation failed, return error
-    if (attrInfo.enumValues && attrInfo.enumValues.length > 0 &&
-      (!attrInfo.patterns || attrInfo.patterns.length === 0)) {
-      const displayValue = value === normalizedValue ? value : `${value} (normalized: ${normalizedValue})`;
-      return {
-        isValid: false,
-        expectedType: attrInfo.type,
-        allowedValues: attrInfo.enumValues,
-        errorMessage: `Value '${displayValue}' is not allowed. Expected one of: ${attrInfo.enumValues.join(', ')}`
-      };
-    }
+      if (attrInfo.maxLength !== undefined && normalizedValue.length > attrInfo.maxLength) {
+        const displayValue = value === normalizedValue ? value : `${value} (normalized: ${normalizedValue})`;
+        return {
+          isValid: false,
+          expectedType: attrInfo.type,
+          errorMessage: `Value '${displayValue}' is too long. Maximum length: ${attrInfo.maxLength}, actual: ${normalizedValue.length}`
+        };
+      }
 
-    // 4. Length restrictions
-    if (attrInfo.minLength !== undefined && normalizedValue.length < attrInfo.minLength) {
-      const displayValue = value === normalizedValue ? value : `${value} (normalized: ${normalizedValue})`;
-      return {
-        isValid: false,
-        expectedType: attrInfo.type,
-        errorMessage: `Value '${displayValue}' is too short. Minimum length: ${attrInfo.minLength}, actual: ${normalizedValue.length}`
-      };
-    }
+      // 4. Basic type validation and numeric ranges
+      const basicValidation = this.validateBasicType(normalizedValue, attrInfo.type || '');
+      if (!basicValidation.isValid) {
+        return basicValidation;
+      }
 
-    if (attrInfo.maxLength !== undefined && normalizedValue.length > attrInfo.maxLength) {
-      const displayValue = value === normalizedValue ? value : `${value} (normalized: ${normalizedValue})`;
-      return {
-        isValid: false,
-        expectedType: attrInfo.type,
-        errorMessage: `Value '${displayValue}' is too long. Maximum length: ${attrInfo.maxLength}, actual: ${normalizedValue.length}`
-      };
-    }
+      // 5. Numeric range validation (only for numeric types)
+      const baseType = this.resolveToBuiltinType(attrInfo.type || '');
+      if (this.isBuiltinNumericType(baseType)) {
+        const numValue = parseFloat(normalizedValue.trim());
+        if (!isNaN(numValue)) {
+          if (attrInfo.minInclusive !== undefined && numValue < attrInfo.minInclusive) {
+            return {
+              isValid: false,
+              expectedType: attrInfo.type,
+              errorMessage: `Value ${numValue} is below minimum allowed value ${attrInfo.minInclusive}`
+            };
+          }
 
-    // 4. Basic type validation and numeric ranges
-    const basicValidation = this.validateBasicType(normalizedValue, attrInfo.type || '');
-    if (!basicValidation.isValid) {
-      return basicValidation;
-    }
+          if (attrInfo.maxInclusive !== undefined && numValue > attrInfo.maxInclusive) {
+            return {
+              isValid: false,
+              expectedType: attrInfo.type,
+              errorMessage: `Value ${numValue} is above maximum allowed value ${attrInfo.maxInclusive}`
+            };
+          }
 
-    // 5. Numeric range validation (only for numeric types)
-    const baseType = this.resolveToBuiltinType(attrInfo.type || '');
-    if (this.isBuiltinNumericType(baseType)) {
-      const numValue = parseFloat(normalizedValue.trim());
-      if (!isNaN(numValue)) {
-        if (attrInfo.minInclusive !== undefined && numValue < attrInfo.minInclusive) {
-          return {
-            isValid: false,
-            expectedType: attrInfo.type,
-            errorMessage: `Value ${numValue} is below minimum allowed value ${attrInfo.minInclusive}`
-          };
-        }
+          if (attrInfo.minExclusive !== undefined && numValue <= attrInfo.minExclusive) {
+            return {
+              isValid: false,
+              expectedType: attrInfo.type,
+              errorMessage: `Value ${numValue} must be greater than ${attrInfo.minExclusive}`
+            };
+          }
 
-        if (attrInfo.maxInclusive !== undefined && numValue > attrInfo.maxInclusive) {
-          return {
-            isValid: false,
-            expectedType: attrInfo.type,
-            errorMessage: `Value ${numValue} is above maximum allowed value ${attrInfo.maxInclusive}`
-          };
-        }
-
-        if (attrInfo.minExclusive !== undefined && numValue <= attrInfo.minExclusive) {
-          return {
-            isValid: false,
-            expectedType: attrInfo.type,
-            errorMessage: `Value ${numValue} must be greater than ${attrInfo.minExclusive}`
-          };
-        }
-
-        if (attrInfo.maxExclusive !== undefined && numValue >= attrInfo.maxExclusive) {
-          return {
-            isValid: false,
-            expectedType: attrInfo.type,
-            errorMessage: `Value ${numValue} must be less than ${attrInfo.maxExclusive}`
-          };
+          if (attrInfo.maxExclusive !== undefined && numValue >= attrInfo.maxExclusive) {
+            return {
+              isValid: false,
+              expectedType: attrInfo.type,
+              errorMessage: `Value ${numValue} must be less than ${attrInfo.maxExclusive}`
+            };
+          }
         }
       }
-    }
 
-    // All validations passed
-    return {
-      isValid: true,
-      expectedType: attrInfo.type,
-      restrictions: restrictions.length > 0 ? restrictions : undefined
-    };
+      // All validations passed
+      return {
+        isValid: true,
+        expectedType: attrInfo.type,
+        restrictions: restrictions.length > 0 ? restrictions : undefined
+      };
+    } finally {
+      this.profEnd('validateValueWithRestrictions', __t0);
+    }
   }
 
   /**
@@ -1862,32 +1931,37 @@ export class Schema {
    * Validate basic XSD types based on actual XSD definitions, not hardcoded assumptions
    */
   private validateBasicType(value: string, typeName: string): AttributeValidationResult {
-    // If no type specified, assume valid
-    if (!typeName) {
-      return { isValid: true };
+    const __t0 = this.profStart();
+    try {
+      // If no type specified, assume valid
+      if (!typeName) {
+        return { isValid: true };
+      }
+
+      // Get the type definition from XSD
+      const typeInfo = this.getTypeValidationInfo(typeName);
+
+      // If we have specific validation rules from XSD, those take precedence
+      if (typeInfo.patterns && typeInfo.patterns.length > 0) {
+        // Pattern validation is already handled in validateValueWithRestrictions
+        // This is just a fallback validation
+        return { isValid: true, expectedType: typeName };
+      }
+
+      if (typeInfo.enumValues && typeInfo.enumValues.length > 0) {
+        // Enumeration validation is already handled in validateValueWithRestrictions
+        // This is just a fallback validation
+        return { isValid: true, expectedType: typeName };
+      }
+
+      // Check if this is a built-in XSD type by examining the actual base type chain
+      const baseType = this.resolveToBuiltinType(typeName);
+
+      // Validate against the resolved built-in type
+      return this.validateBuiltinXsdType(value, baseType, typeName);
+    } finally {
+      this.profEnd('validateBasicType', __t0);
     }
-
-    // Get the type definition from XSD
-    const typeInfo = this.getTypeValidationInfo(typeName);
-
-    // If we have specific validation rules from XSD, those take precedence
-    if (typeInfo.patterns && typeInfo.patterns.length > 0) {
-      // Pattern validation is already handled in validateValueWithRestrictions
-      // This is just a fallback validation
-      return { isValid: true, expectedType: typeName };
-    }
-
-    if (typeInfo.enumValues && typeInfo.enumValues.length > 0) {
-      // Enumeration validation is already handled in validateValueWithRestrictions
-      // This is just a fallback validation
-      return { isValid: true, expectedType: typeName };
-    }
-
-    // Check if this is a built-in XSD type by examining the actual base type chain
-    const baseType = this.resolveToBuiltinType(typeName);
-
-    // Validate against the resolved built-in type
-    return this.validateBuiltinXsdType(value, baseType, typeName);
   }
 
   /**
@@ -1966,97 +2040,107 @@ export class Schema {
    * Helper method to find child elements by name
    */
   private findChildElements(parent: Element, elementName: string): Element[] {
-    const results: Element[] = [];
+    const __t0 = this.profStart();
+    try {
+      const results: Element[] = [];
 
-    const searchInNode = (node: Element): void => {
-      if (node.localName === elementName) {
-        results.push(node);
-        return; // Don't recurse into found elements
-      }
-
-      // Search immediate children only (not deep recursion)
-      for (let i = 0; i < node.childNodes.length; i++) {
-        const child = node.childNodes[i];
-        if (child.nodeType === 1) {
-          searchInNode(child as Element);
+      const searchInNode = (node: Element): void => {
+        if (node.localName === elementName) {
+          results.push(node);
+          return; // Don't recurse into found elements
         }
-      }
-    };
 
-    searchInNode(parent);
-    return results;
+        // Search immediate children only (not deep recursion)
+        for (let i = 0; i < node.childNodes.length; i++) {
+          const child = node.childNodes[i];
+          if (child.nodeType === 1) {
+            searchInNode(child as Element);
+          }
+        }
+      };
+
+      searchInNode(parent);
+      return results;
+    } finally {
+      this.profEnd('findChildElements', __t0);
+    }
   }
 
   /**
    * Validate against built-in XSD types only
    */
   private validateBuiltinXsdType(value: string, builtinType: string, originalType: string): AttributeValidationResult {
-    switch (builtinType) {
-      case 'xs:string':
-        // All strings are valid
-        return { isValid: true, expectedType: originalType };
+    const __t0 = this.profStart();
+    try {
+      switch (builtinType) {
+        case 'xs:string':
+          // All strings are valid
+          return { isValid: true, expectedType: originalType };
 
-      case 'xs:boolean':
-        const lowerValue = value.toLowerCase().trim();
-        const isValidBoolean = ['true', 'false', '1', '0'].includes(lowerValue);
-        return {
-          isValid: isValidBoolean,
-          expectedType: originalType,
-          errorMessage: isValidBoolean ? undefined : `Expected boolean value (true, false, 1, 0), got '${value}'`
-        };
+        case 'xs:boolean':
+          const lowerValue = value.toLowerCase().trim();
+          const isValidBoolean = ['true', 'false', '1', '0'].includes(lowerValue);
+          return {
+            isValid: isValidBoolean,
+            expectedType: originalType,
+            errorMessage: isValidBoolean ? undefined : `Expected boolean value (true, false, 1, 0), got '${value}'`
+          };
 
-      case 'xs:int':
-      case 'xs:integer':
-      case 'xs:long':
-      case 'xs:short':
-      case 'xs:byte':
-      case 'xs:positiveInteger':
-      case 'xs:negativeInteger':
-      case 'xs:nonPositiveInteger':
-      case 'xs:nonNegativeInteger':
-      case 'xs:unsignedInt':
-      case 'xs:unsignedLong':
-      case 'xs:unsignedShort':
-      case 'xs:unsignedByte':
-        const isValidInteger = /^-?\d+$/.test(value.trim());
-        return {
-          isValid: isValidInteger,
-          expectedType: originalType,
-          errorMessage: isValidInteger ? undefined : `Expected integer value, got '${value}'`
-        };
+        case 'xs:int':
+        case 'xs:integer':
+        case 'xs:long':
+        case 'xs:short':
+        case 'xs:byte':
+        case 'xs:positiveInteger':
+        case 'xs:negativeInteger':
+        case 'xs:nonPositiveInteger':
+        case 'xs:nonNegativeInteger':
+        case 'xs:unsignedInt':
+        case 'xs:unsignedLong':
+        case 'xs:unsignedShort':
+        case 'xs:unsignedByte':
+          const isValidInteger = /^-?\d+$/.test(value.trim());
+          return {
+            isValid: isValidInteger,
+            expectedType: originalType,
+            errorMessage: isValidInteger ? undefined : `Expected integer value, got '${value}'`
+          };
 
-      case 'xs:float':
-      case 'xs:double':
-      case 'xs:decimal':
-        const isValidNumber = /^-?\d*\.?\d+([eE][+-]?\d+)?$/.test(value.trim()) || /^-?\d+$/.test(value.trim());
-        return {
-          isValid: isValidNumber,
-          expectedType: originalType,
-          errorMessage: isValidNumber ? undefined : `Expected numeric value, got '${value}'`
-        };
+        case 'xs:float':
+        case 'xs:double':
+        case 'xs:decimal':
+          const isValidNumber = /^-?\d*\.?\d+([eE][+-]?\d+)?$/.test(value.trim()) || /^-?\d+$/.test(value.trim());
+          return {
+            isValid: isValidNumber,
+            expectedType: originalType,
+            errorMessage: isValidNumber ? undefined : `Expected numeric value, got '${value}'`
+          };
 
-      case 'xs:date':
-        // Basic date format validation (YYYY-MM-DD)
-        const isValidDate = /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
-        return {
-          isValid: isValidDate,
-          expectedType: originalType,
-          errorMessage: isValidDate ? undefined : `Expected date format (YYYY-MM-DD), got '${value}'`
-        };
+        case 'xs:date':
+          // Basic date format validation (YYYY-MM-DD)
+          const isValidDate = /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
+          return {
+            isValid: isValidDate,
+            expectedType: originalType,
+            errorMessage: isValidDate ? undefined : `Expected date format (YYYY-MM-DD), got '${value}'`
+          };
 
-      case 'xs:time':
-        // Basic time format validation (HH:MM:SS)
-        const isValidTime = /^\d{2}:\d{2}:\d{2}$/.test(value.trim());
-        return {
-          isValid: isValidTime,
-          expectedType: originalType,
-          errorMessage: isValidTime ? undefined : `Expected time format (HH:MM:SS), got '${value}'`
-        };
+        case 'xs:time':
+          // Basic time format validation (HH:MM:SS)
+          const isValidTime = /^\d{2}:\d{2}:\d{2}$/.test(value.trim());
+          return {
+            isValid: isValidTime,
+            expectedType: originalType,
+            errorMessage: isValidTime ? undefined : `Expected time format (HH:MM:SS), got '${value}'`
+          };
 
-      default:
-        // For unknown built-in types or custom types, assume valid
-        // The specific validation rules should be handled by patterns/enums
-        return { isValid: true, expectedType: originalType };
+        default:
+          // For unknown built-in types or custom types, assume valid
+          // The specific validation rules should be handled by patterns/enums
+          return { isValid: true, expectedType: originalType };
+      }
+    } finally {
+      this.profEnd('validateBuiltinXsdType', __t0);
     }
   }
 
@@ -2067,47 +2151,52 @@ export class Schema {
    * @returns Element definition if found, undefined otherwise
    */
   private findElementTopDown(elementName: string, topDownHierarchy: string[]): Element | undefined {
-    if (topDownHierarchy.length === 0) {
-      // No hierarchy - look for global elements
-      const globalElements = this.getGlobalElementDefinitions(elementName);
-      return globalElements.length > 0 ? globalElements[0] : undefined;
-    }
-
-    // Start from root and walk down the hierarchy
-    const rootElementName = topDownHierarchy[0];
-    let currentDefs = this.getGlobalElementOrTypeDefs(rootElementName);
-
-    if (currentDefs.length !== 1) {
-      return undefined;
-    }
-
-    // Walk down through each level of the hierarchy
-    for (let level = 1; level < topDownHierarchy.length; level++) {
-      const nextElementName = topDownHierarchy[level];
-      const nextLevelDefs: Element[] = [];
-
-      // Search for the next element in all current definitions
-      for (const currentDef of currentDefs) {
-        const found = this.findElementsInDefinition(currentDef, nextElementName);
-        nextLevelDefs.push(...found);
+    const __t0 = this.profStart();
+    try {
+      if (topDownHierarchy.length === 0) {
+        // No hierarchy - look for global elements
+        const globalElements = this.getGlobalElementDefinitions(elementName);
+        return globalElements.length > 0 ? globalElements[0] : undefined;
       }
 
-      if (nextLevelDefs.length === 0) {
-        return undefined; // Path broken - element not found at this level
+      // Start from root and walk down the hierarchy
+      const rootElementName = topDownHierarchy[0];
+      let currentDefs = this.getGlobalElementOrTypeDefs(rootElementName);
+
+      if (currentDefs.length !== 1) {
+        return undefined;
       }
 
-      currentDefs = nextLevelDefs;
-    }
+      // Walk down through each level of the hierarchy
+      for (let level = 1; level < topDownHierarchy.length; level++) {
+        const nextElementName = topDownHierarchy[level];
+        const nextLevelDefs: Element[] = [];
 
-    // Now search for the target element in the final parent definitions
-    const targetElements: Element[] = [];
-    for (const parentDef of currentDefs) {
-      const found = this.findElementsInDefinition(parentDef, elementName);
-      targetElements.push(...found);
-    }
+        // Search for the next element in all current definitions
+        for (const currentDef of currentDefs) {
+          const found = this.findElementsInDefinition(currentDef, nextElementName);
+          nextLevelDefs.push(...found);
+        }
 
-    // Return the first found element (could add uniqueness logic here later)
-    return targetElements.length > 0 ? targetElements[0] : undefined;
+        if (nextLevelDefs.length === 0) {
+          return undefined; // Path broken - element not found at this level
+        }
+
+        currentDefs = nextLevelDefs;
+      }
+
+      // Now search for the target element in the final parent definitions
+      const targetElements: Element[] = [];
+      for (const parentDef of currentDefs) {
+        const found = this.findElementsInDefinition(parentDef, elementName);
+        targetElements.push(...found);
+      }
+
+      // Return the first found element (could add uniqueness logic here later)
+      return targetElements.length > 0 ? targetElements[0] : undefined;
+    } finally {
+      this.profEnd('findElementTopDown', __t0);
+    }
   }
 
   /**
@@ -2212,86 +2301,91 @@ export class Schema {
    * @returns Map where key is child element name and value is its annotation text
    */
   public getPossibleChildElements(elementName: string, hierarchy: string[] = [], previousSibling: string = ''): Map<string, string> {
-    let tDef = 0, tFindAll = 0, tFilter = 0, tAnnot = 0;
+    const __t0 = this.profStart();
+    try {
+      let tDef = 0, tFindAll = 0, tFilter = 0, tAnnot = 0;
 
-    // Fast-path cache for final result
-    const resultCache = this.cache.possibleChildrenResultCache;
+      // Fast-path cache for final result
+      const resultCache = this.cache.possibleChildrenResultCache;
 
-    // Get the element definition using the same logic as other methods
-    const tDef0 = (globalThis.performance?.now?.() ?? Date.now());
-    const elementDef = this.getElementDefinition(elementName, hierarchy);
-    tDef += (globalThis.performance?.now?.() ?? Date.now()) - tDef0;
+      // Get the element definition using the same logic as other methods
+      const tDef0 = (globalThis.performance?.now?.() ?? Date.now());
+      const elementDef = this.getElementDefinition(elementName, hierarchy);
+      tDef += (globalThis.performance?.now?.() ?? Date.now()) - tDef0;
 
-    if (!elementDef) {
-      return new Map<string, string>();
-    }
-    let cachedMap = resultCache.get(elementDef);
-    if (cachedMap) {
-      if (cachedMap.has(previousSibling)) {
-        if (this.shouldProfileCaches) this.cacheStats.possibleChildrenResultCache.hits++;
-        return new Map(cachedMap.get(previousSibling));
+      if (!elementDef) {
+        return new Map<string, string>();
       }
-    } else {
-      cachedMap = new Map();
-      resultCache.set(elementDef, cachedMap);
-    }
+      let cachedMap = resultCache.get(elementDef);
+      if (cachedMap) {
+        if (cachedMap.has(previousSibling)) {
+          if (this.shouldProfileCaches) this.cacheStats.possibleChildrenResultCache.hits++;
+          return new Map(cachedMap.get(previousSibling));
+        }
+      } else {
+        cachedMap = new Map();
+        resultCache.set(elementDef, cachedMap);
+      }
 
-    // Get all possible child elements
-    const tFindAll0 = (globalThis.performance?.now?.() ?? Date.now());
-    const childElements = this.getChildElementsCached(elementDef);
-    tFindAll += (globalThis.performance?.now?.() ?? Date.now()) - tFindAll0;
+      // Get all possible child elements
+      const tFindAll0 = (globalThis.performance?.now?.() ?? Date.now());
+      const childElements = this.getChildElementsCached(elementDef);
+      tFindAll += (globalThis.performance?.now?.() ?? Date.now()) - tFindAll0;
 
-    let filteredElements: Element[];
-    const prevSibling = previousSibling ? childElements.find(el => el.getAttribute('name') === previousSibling) : undefined;
-    // If previousSibling is provided, filter based on sequence/choice constraints
-    if (previousSibling && prevSibling) {
-      const tFilter0 = (globalThis.performance?.now?.() ?? Date.now());
-      filteredElements = this.filterElementsBySequenceConstraints(elementDef, childElements, prevSibling);
-      tFilter += (globalThis.performance?.now?.() ?? Date.now()) - tFilter0;
-    } else {
-      // No previous sibling: honor the content model and only return start-capable elements
-      const tFilter0 = (globalThis.performance?.now?.() ?? Date.now());
-      const contentModel = this.getCachedContentModel(elementDef);
-      if (contentModel) {
-        const modelType = contentModel.localName;
-        if (modelType === 'choice') {
-          filteredElements = this.getElementsInChoice(contentModel, childElements);
-        } else if (modelType === 'sequence') {
-          filteredElements = this.getStartElementsOfSequence(contentModel, childElements);
-        } else if (modelType === 'all') {
-          // For xs:all, any element can start
-          filteredElements = childElements;
+      let filteredElements: Element[];
+      const prevSibling = previousSibling ? childElements.find(el => el.getAttribute('name') === previousSibling) : undefined;
+      // If previousSibling is provided, filter based on sequence/choice constraints
+      if (previousSibling && prevSibling) {
+        const tFilter0 = (globalThis.performance?.now?.() ?? Date.now());
+        filteredElements = this.filterElementsBySequenceConstraints(elementDef, childElements, prevSibling);
+        tFilter += (globalThis.performance?.now?.() ?? Date.now()) - tFilter0;
+      } else {
+        // No previous sibling: honor the content model and only return start-capable elements
+        const tFilter0 = (globalThis.performance?.now?.() ?? Date.now());
+        const contentModel = this.getCachedContentModel(elementDef);
+        if (contentModel) {
+          const modelType = contentModel.localName;
+          if (modelType === 'choice') {
+            filteredElements = this.getElementsInChoice(contentModel, childElements);
+          } else if (modelType === 'sequence') {
+            filteredElements = this.getStartElementsOfSequence(contentModel, childElements);
+          } else if (modelType === 'all') {
+            // For xs:all, any element can start
+            filteredElements = childElements;
+          } else {
+            filteredElements = childElements;
+          }
         } else {
           filteredElements = childElements;
         }
-      } else {
-        filteredElements = childElements;
+        tFilter += (globalThis.performance?.now?.() ?? Date.now()) - tFilter0;
       }
-      tFilter += (globalThis.performance?.now?.() ?? Date.now()) - tFilter0;
-    }
 
-    const result = new Map<string, string>();
+      const result = new Map<string, string>();
 
-    // Build result map with annotations
-    const tAnnot0 = (globalThis.performance?.now?.() ?? Date.now());
-    for (const element of filteredElements) {
-      const name = element.getAttribute('name');
-      if (!name) continue;
-      const annotation = this.getAnnotationCached(element);
-      result.set(name, annotation);
-    }
-    tAnnot += (globalThis.performance?.now?.() ?? Date.now()) - tAnnot0;
+      // Build result map with annotations
+      const tAnnot0 = (globalThis.performance?.now?.() ?? Date.now());
+      for (const element of filteredElements) {
+        const name = element.getAttribute('name');
+        if (!name) continue;
+        const annotation = this.getAnnotationCached(element);
+        result.set(name, annotation);
+      }
+      tAnnot += (globalThis.performance?.now?.() ?? Date.now()) - tAnnot0;
 
-    // Cache the final result map for fast retrieval
-    cachedMap.set(previousSibling, result);
-    if (this.shouldProfileCaches) this.cacheStats.possibleChildrenResultCache.sets++;
-    // Optional profiling output
-    if ((process.env.XSDL_PROFILE_CHILDREN || '').trim() === '1') {
-      const msg = `getPossibleChildElements(${elementName}) -> ${result.size} children; def=${tDef.toFixed(3)}ms; findAll=${tFindAll.toFixed(3)}ms; filter=${tFilter.toFixed(3)}ms; annot=${tAnnot.toFixed(3)}ms`;
-      // eslint-disable-next-line no-console
-      console.log(msg);
+      // Cache the final result map for fast retrieval
+      cachedMap.set(previousSibling, result);
+      if (this.shouldProfileCaches) this.cacheStats.possibleChildrenResultCache.sets++;
+      // Optional profiling output
+      if ((process.env.XSDL_PROFILE_CHILDREN || '').trim() === '1') {
+        const msg = `getPossibleChildElements(${elementName}) -> ${result.size} children; def=${tDef.toFixed(3)}ms; findAll=${tFindAll.toFixed(3)}ms; filter=${tFilter.toFixed(3)}ms; annot=${tAnnot.toFixed(3)}ms`;
+        // eslint-disable-next-line no-console
+        console.log(msg);
+      }
+      return result;
+    } finally {
+      this.profEnd('getPossibleChildElements', __t0);
     }
-    return result;
   }
 
   /**
@@ -2308,97 +2402,112 @@ export class Schema {
     parentHierarchy: string[] = [],
     previousSibling?: string
   ): boolean {
-    // Memoized cache by resolved parent Element and previousSibling
-    // Resolve the parent element definition within the provided hierarchy
-    const parentDef = this.getElementDefinition(parentName, parentHierarchy);
-    if (!parentDef) return false;
+    const __t0 = this.profStart();
+    try {
+      // Memoized cache by resolved parent Element and previousSibling
+      // Resolve the parent element definition within the provided hierarchy
+      const parentDef = this.getElementDefinition(parentName, parentHierarchy);
+      if (!parentDef) return false;
 
-    // Fast path: cache per parentDef -> prevKey -> childName
-    const prevKey = previousSibling || '__START__';
-    let byPrev = this.cache.validChildCache!.get(parentDef);
-    if (!byPrev) { byPrev = new Map(); this.cache.validChildCache!.set(parentDef, byPrev); }
-    let byChild = byPrev.get(prevKey);
-    if (!byChild) { byChild = new Map(); byPrev.set(prevKey, byChild); }
-    if (byChild.has(elementName)) { if (this.shouldProfileCaches) this.cacheStats.validChildCache.hits++; return byChild.get(elementName)!; }
-    this.cacheStats.validChildCache.misses++
-    // Discover all immediate child element candidates (cached)
-    const allChildren = this.getChildElementsCached(parentDef);
-    if (allChildren.length === 0) { byChild.set(elementName, false); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return false; }
+      // Fast path: cache per parentDef -> prevKey -> childName
+      const prevKey = previousSibling || '__START__';
+      let byPrev = this.cache.validChildCache!.get(parentDef);
+      if (!byPrev) { byPrev = new Map(); this.cache.validChildCache!.set(parentDef, byPrev); }
+      let byChild = byPrev.get(prevKey);
+      if (!byChild) { byChild = new Map(); byPrev.set(prevKey, byChild); }
+      if (byChild.has(elementName)) { if (this.shouldProfileCaches) this.cacheStats.validChildCache.hits++; return byChild.get(elementName)!; }
+      this.cacheStats.validChildCache.misses++
+      // Discover all immediate child element candidates (cached)
+      const allChildren = this.getChildElementsCached(parentDef);
+      if (allChildren.length === 0) { byChild.set(elementName, false); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return false; }
 
-    // Find the concrete Element node for the requested child; if not declared, it's invalid
-    const candidate = allChildren.find(el => el.getAttribute('name') === elementName);
-    if (!candidate) { byChild.set(elementName, false); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return false; }
+      // Find the concrete Element node for the requested child; if not declared, it's invalid
+      const candidate = allChildren.find(el => el.getAttribute('name') === elementName);
+      if (!candidate) { byChild.set(elementName, false); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return false; }
 
-    // If there is no ordering constraint or xs:all, declaration is sufficient
-    const contentModel = this.getCachedContentModel(parentDef);
+      // If there is no ordering constraint or xs:all, declaration is sufficient
+      const contentModel = this.getCachedContentModel(parentDef);
 
-    const prevSibling = allChildren.find(el => el.getAttribute('name') === previousSibling);
-    if (!previousSibling || !prevSibling) {
+      const prevSibling = allChildren.find(el => el.getAttribute('name') === previousSibling);
+      if (!previousSibling || !prevSibling) {
+        if (!contentModel) { byChild.set(elementName, true); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return true; }
+        const modelType = contentModel.localName;
+        if (modelType === 'all') { byChild.set(elementName, true); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return true; }
+        if (modelType === 'choice') {
+          // Check if the candidate can start any alternative in the choice
+          const startSet = this.getModelStartSet(contentModel, allChildren);
+          const ok = startSet.has(elementName);
+          byChild.set(elementName, ok); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++;
+          return ok;
+        }
+        if (modelType === 'sequence') {
+          // Check if the candidate can start the sequence (respecting minOccurs chain)
+          const startSet = this.getModelStartSet(contentModel, allChildren);
+          const ok = startSet.has(elementName);
+          byChild.set(elementName, ok); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++;
+          return ok;
+        }
+        // Unknown model type: be permissive like getPossibleChildElements fallback
+        byChild.set(elementName, true); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++;
+        return true;
+      }
+
+      // There is a previous sibling; handle ordering constraints efficiently by filtering only the candidate
       if (!contentModel) { byChild.set(elementName, true); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return true; }
-      const modelType = contentModel.localName;
-      if (modelType === 'all') { byChild.set(elementName, true); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return true; }
-      if (modelType === 'choice') {
-        // Check if the candidate can start any alternative in the choice
-        const startSet = this.getModelStartSet(contentModel, allChildren);
-        const ok = startSet.has(elementName);
-        byChild.set(elementName, ok); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++;
-        return ok;
-      }
-      if (modelType === 'sequence') {
-        // Check if the candidate can start the sequence (respecting minOccurs chain)
-        const startSet = this.getModelStartSet(contentModel, allChildren);
-        const ok = startSet.has(elementName);
-        byChild.set(elementName, ok); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++;
-        return ok;
-      }
-      // Unknown model type: be permissive like getPossibleChildElements fallback
-      byChild.set(elementName, true); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++;
-      return true;
+      if (contentModel.localName === 'all') { byChild.set(elementName, true); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return true; }
+      // Use cached next-name set for this content model and previous sibling
+      const nextSet = this.getModelNextSet(contentModel, previousSibling, prevSibling, allChildren);
+      const ok = nextSet.has(elementName);
+      byChild.set(elementName, ok); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++;
+      return ok;
+    } finally {
+      this.profEnd('isValidChild', __t0);
     }
-
-    // There is a previous sibling; handle ordering constraints efficiently by filtering only the candidate
-    if (!contentModel) { byChild.set(elementName, true); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return true; }
-    if (contentModel.localName === 'all') { byChild.set(elementName, true); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return true; }
-    // Use cached next-name set for this content model and previous sibling
-    const nextSet = this.getModelNextSet(contentModel, previousSibling, prevSibling, allChildren);
-    const ok = nextSet.has(elementName);
-    byChild.set(elementName, ok); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++;
-    return ok;
   }
 
   // Compute and cache start-name set for a content model
   private getModelStartSet(model: Element, allChildren: Element[]): Set<string> {
-    let cached = this.cache.modelStartNamesCache!.get(model);
-    if (cached) { if (this.shouldProfileCaches) this.cacheStats.modelStartNamesCache.hits++; return cached; }
-    if (this.shouldProfileCaches) this.cacheStats.modelStartNamesCache.misses++;
-    let starters: Element[] = [];
-    if (model.localName === 'choice' || model.localName === 'all') {
-      starters = this.getElementsInChoice(model, allChildren);
-    } else if (model.localName === 'sequence') {
-      starters = this.getStartElementsOfSequence(model, allChildren);
-    } else {
-      // Fallback: allow any declared children to start
-      starters = allChildren;
+    const __t0 = this.profStart();
+    try {
+      let cached = this.cache.modelStartNamesCache!.get(model);
+      if (cached) { if (this.shouldProfileCaches) this.cacheStats.modelStartNamesCache.hits++; return cached; }
+      if (this.shouldProfileCaches) this.cacheStats.modelStartNamesCache.misses++;
+      let starters: Element[] = [];
+      if (model.localName === 'choice' || model.localName === 'all') {
+        starters = this.getElementsInChoice(model, allChildren);
+      } else if (model.localName === 'sequence') {
+        starters = this.getStartElementsOfSequence(model, allChildren);
+      } else {
+        // Fallback: allow any declared children to start
+        starters = allChildren;
+      }
+      const set = new Set(starters.map(e => e.getAttribute('name')!).filter(Boolean) as string[]);
+      this.cache.modelStartNamesCache!.set(model, set);
+      if (this.shouldProfileCaches) this.cacheStats.modelStartNamesCache.sets++;
+      return set;
+    } finally {
+      this.profEnd('getModelStartSet', __t0);
     }
-    const set = new Set(starters.map(e => e.getAttribute('name')!).filter(Boolean) as string[]);
-    this.cache.modelStartNamesCache!.set(model, set);
-    if (this.shouldProfileCaches) this.cacheStats.modelStartNamesCache.sets++;
-    return set;
   }
 
   // Compute and cache next-name set for a content model given previous sibling
   private getModelNextSet(model: Element, previousSibling: string, prevSibling: Element, allChildren: Element[]): Set<string> {
-    let byPrev = this.cache.modelNextNamesCache!.get(model);
-    if (!byPrev) { byPrev = new Map(); this.cache.modelNextNamesCache!.set(model, byPrev); }
-    const prevKey = previousSibling || '__START__';
-    const existing = byPrev.get(prevKey);
-    if (existing) { if (this.shouldProfileCaches) this.cacheStats.modelNextNamesCache.hits++; return existing; }
-    if (this.shouldProfileCaches) this.cacheStats.modelNextNamesCache.misses++;
-    const nextElems = this.getValidNextElementsInContentModel(model, prevSibling, allChildren);
-    const set = new Set(nextElems.map(e => e.getAttribute('name')!).filter(Boolean) as string[]);
-    byPrev.set(prevKey, set);
-    if (this.shouldProfileCaches) this.cacheStats.modelNextNamesCache.sets++;
-    return set;
+    const __t0 = this.profStart();
+    try {
+      let byPrev = this.cache.modelNextNamesCache!.get(model);
+      if (!byPrev) { byPrev = new Map(); this.cache.modelNextNamesCache!.set(model, byPrev); }
+      const prevKey = previousSibling || '__START__';
+      const existing = byPrev.get(prevKey);
+      if (existing) { if (this.shouldProfileCaches) this.cacheStats.modelNextNamesCache.hits++; return existing; }
+      if (this.shouldProfileCaches) this.cacheStats.modelNextNamesCache.misses++;
+      const nextElems = this.getValidNextElementsInContentModel(model, prevSibling, allChildren);
+      const set = new Set(nextElems.map(e => e.getAttribute('name')!).filter(Boolean) as string[]);
+      byPrev.set(prevKey, set);
+      if (this.shouldProfileCaches) this.cacheStats.modelNextNamesCache.sets++;
+      return set;
+    } finally {
+      this.profEnd('getModelNextSet', __t0);
+    }
   }
 
   /**
@@ -2409,16 +2518,21 @@ export class Schema {
    * @returns Filtered array of elements that are valid as next elements
    */
   private filterElementsBySequenceConstraints(elementDef: Element, allChildren: Element[], previousSibling: Element): Element[] {
-    // Find the content model (sequence/choice) within the element definition (cached)
-    const contentModel = this.getCachedContentModel(elementDef);
+    const __t0 = this.profStart();
+    try {
+      // Find the content model (sequence/choice) within the element definition (cached)
+      const contentModel = this.getCachedContentModel(elementDef);
 
-    if (!contentModel) {
-      // If no content model found, return all children (fallback)
-      return allChildren;
+      if (!contentModel) {
+        // If no content model found, return all children (fallback)
+        return allChildren;
+      }
+
+      // Apply filtering based on content model type
+      return this.getValidNextElementsInContentModel(contentModel, previousSibling, allChildren);
+    } finally {
+      this.profEnd('filterElementsBySequenceConstraints', __t0);
     }
-
-    // Apply filtering based on content model type
-    return this.getValidNextElementsInContentModel(contentModel, previousSibling, allChildren);
   }
 
   // Note: Sequence and choice handling is fully data-driven from the XSD; no element-name
@@ -2430,99 +2544,119 @@ export class Schema {
    * @returns The content model element, or null if not found
    */
   private findContentModel(elementDef: Element): Element | null {
-    // If the node itself is already a content model, return it
-    if (elementDef.localName === 'sequence' || elementDef.localName === 'choice' || elementDef.localName === 'all') {
-      return elementDef;
-    }
-
-    // If the node is a group (definition or ref), resolve to its direct content model
-    if (elementDef.localName === 'group') {
-      const ref = elementDef.getAttribute('ref');
-      const groupNode = ref ? this.schemaIndex.groups[ref] : elementDef;
-      if (groupNode) {
-        const direct = this.findDirectContentModel(groupNode);
-        if (direct) return direct;
+    const __t0 = this.profStart();
+    try {
+      // If the node itself is already a content model, return it
+      if (elementDef.localName === 'sequence' || elementDef.localName === 'choice' || elementDef.localName === 'all') {
+        return elementDef;
       }
-    }
 
-    // If this is a complexType or content extension/restriction, find direct content model
-    if (elementDef.localName === 'complexType' ||
-      elementDef.localName === 'complexContent' ||
-      elementDef.localName === 'simpleContent' ||
-      elementDef.localName === 'extension' ||
-      elementDef.localName === 'restriction') {
-      const direct = this.findDirectContentModel(elementDef);
-      if (direct) return direct;
-    }
-
-    // Look for complexType first
-    for (let i = 0; i < elementDef.childNodes.length; i++) {
-      const child = elementDef.childNodes[i];
-      if (child.nodeType === 1 && (child as Element).localName === 'complexType') {
-        const complexType = child as Element;
-
-        // Direct sequence/choice/all in complexType
-        const directModel = this.findDirectContentModel(complexType);
-        if (directModel) {
-          return directModel;
+      // If the node is a group (definition or ref), resolve to its direct content model
+      if (elementDef.localName === 'group') {
+        const ref = elementDef.getAttribute('ref');
+        const groupNode = ref ? this.schemaIndex.groups[ref] : elementDef;
+        if (groupNode) {
+          const direct = this.findDirectContentModel(groupNode);
+          if (direct) return direct;
         }
       }
-    }
 
-    // Look for type reference and follow it
-    const typeAttr = elementDef.getAttribute('type');
-    if (typeAttr && !this.isBuiltInXsdType(typeAttr)) {
-      const typeDef = this.schemaIndex.types[typeAttr] || this.schemaIndex.types[typeAttr.replace(/^.*:/, '')];
-      if (typeDef) {
-        return this.getCachedContentModel(typeDef);
+      // If this is a complexType or content extension/restriction, find direct content model
+      if (elementDef.localName === 'complexType' ||
+        elementDef.localName === 'complexContent' ||
+        elementDef.localName === 'simpleContent' ||
+        elementDef.localName === 'extension' ||
+        elementDef.localName === 'restriction') {
+        const direct = this.findDirectContentModel(elementDef);
+        if (direct) return direct;
       }
-    }
 
-    return null;
+      // Look for complexType first
+      for (let i = 0; i < elementDef.childNodes.length; i++) {
+        const child = elementDef.childNodes[i];
+        if (child.nodeType === 1 && (child as Element).localName === 'complexType') {
+          const complexType = child as Element;
+
+          // Direct sequence/choice/all in complexType
+          const directModel = this.findDirectContentModel(complexType);
+          if (directModel) {
+            return directModel;
+          }
+        }
+      }
+
+      // Look for type reference and follow it
+      const typeAttr = elementDef.getAttribute('type');
+      if (typeAttr && !this.isBuiltInXsdType(typeAttr)) {
+        const typeDef = this.schemaIndex.types[typeAttr] || this.schemaIndex.types[typeAttr.replace(/^.*:/, '')];
+        if (typeDef) {
+          return this.getCachedContentModel(typeDef);
+        }
+      }
+
+      return null;
+    } finally {
+      this.profEnd('findContentModel', __t0);
+    }
   }
 
   // Cached content model resolver
   private getCachedContentModel(def: Element): Element | null {
-    const cache = this.cache.contentModelCache!;
-    if (cache.has(def)) { if (this.shouldProfileCaches) this.cacheStats.contentModelCache.hits++; return cache.get(def)!; }
-    if (this.shouldProfileCaches) this.cacheStats.contentModelCache.misses++;
-    const model = this.findContentModel(def);
-    cache.set(def, model);
-    if (this.shouldProfileCaches) this.cacheStats.contentModelCache.sets++;
-    return model;
+    const __t0 = this.profStart();
+    try {
+      const cache = this.cache.contentModelCache!;
+      if (cache.has(def)) { if (this.shouldProfileCaches) this.cacheStats.contentModelCache.hits++; return cache.get(def)!; }
+      if (this.shouldProfileCaches) this.cacheStats.contentModelCache.misses++;
+      const model = this.findContentModel(def);
+      cache.set(def, model);
+      if (this.shouldProfileCaches) this.cacheStats.contentModelCache.sets++;
+      return model;
+    } finally {
+      this.profEnd('getCachedContentModel', __t0);
+    }
   }
 
   // Cached child elements discovery
   private getChildElementsCached(def: Element): Element[] {
-    const cache = this.cache.childElementsByDef!;
-    const cached = cache.get(def);
-    if (cached) { if (this.shouldProfileCaches) this.cacheStats.childElementsByDef.hits++; return cached; }
-    if (this.shouldProfileCaches) this.cacheStats.childElementsByDef.misses++;
-    const elems = this.findAllElementsInDefinition(def);
-    cache.set(def, elems);
-    if (this.shouldProfileCaches) this.cacheStats.childElementsByDef.sets++;
-    return elems;
+    const __t0 = this.profStart();
+    try {
+      const cache = this.cache.childElementsByDef!;
+      const cached = cache.get(def);
+      if (cached) { if (this.shouldProfileCaches) this.cacheStats.childElementsByDef.hits++; return cached; }
+      if (this.shouldProfileCaches) this.cacheStats.childElementsByDef.misses++;
+      const elems = this.findAllElementsInDefinition(def);
+      cache.set(def, elems);
+      if (this.shouldProfileCaches) this.cacheStats.childElementsByDef.sets++;
+      return elems;
+    } finally {
+      this.profEnd('getChildElementsCached', __t0);
+    }
   }
 
   // Cached annotation extraction with type fallback
   private getAnnotationCached(el: Element): string {
-    const cache = this.cache.annotationCache!;
-    const existing = cache.get(el);
-    if (existing !== undefined) { if (this.shouldProfileCaches) this.cacheStats.annotationCache.hits++; return existing; }
-    if (this.shouldProfileCaches) this.cacheStats.annotationCache.misses++;
-    let annotation = Schema.extractAnnotationText(el) || '';
-    if (!annotation) {
-      const typeName = el.getAttribute('type');
-      if (typeName) {
-        const typeDef = this.schemaIndex.types[typeName];
-        if (typeDef) {
-          annotation = Schema.extractAnnotationText(typeDef) || '';
+    const __t0 = this.profStart();
+    try {
+      const cache = this.cache.annotationCache!;
+      const existing = cache.get(el);
+      if (existing !== undefined) { if (this.shouldProfileCaches) this.cacheStats.annotationCache.hits++; return existing; }
+      if (this.shouldProfileCaches) this.cacheStats.annotationCache.misses++;
+      let annotation = Schema.extractAnnotationText(el) || '';
+      if (!annotation) {
+        const typeName = el.getAttribute('type');
+        if (typeName) {
+          const typeDef = this.schemaIndex.types[typeName];
+          if (typeDef) {
+            annotation = Schema.extractAnnotationText(typeDef) || '';
+          }
         }
       }
+      cache.set(el, annotation);
+      if (this.shouldProfileCaches) this.cacheStats.annotationCache.sets++;
+      return annotation;
+    } finally {
+      this.profEnd('getAnnotationCached', __t0);
     }
-    cache.set(el, annotation);
-    if (this.shouldProfileCaches) this.cacheStats.annotationCache.sets++;
-    return annotation;
   }
 
   /**
@@ -2531,43 +2665,48 @@ export class Schema {
    * @returns The content model element, or null if not found
    */
   private findDirectContentModel(parent: Element): Element | null {
-    for (let i = 0; i < parent.childNodes.length; i++) {
-      const child = parent.childNodes[i];
-      if (child.nodeType === 1) {
-        const element = child as Element;
+    const __t0 = this.profStart();
+    try {
+      for (let i = 0; i < parent.childNodes.length; i++) {
+        const child = parent.childNodes[i];
+        if (child.nodeType === 1) {
+          const element = child as Element;
 
-        // Direct sequence/choice/all
-        if (element.localName === 'sequence' ||
-          element.localName === 'choice' ||
-          element.localName === 'all') {
-          return element;
-        }
-
-        // Look in extension/restriction
-        if (element.localName === 'extension' || element.localName === 'restriction') {
-          const nested = this.findDirectContentModel(element);
-          if (nested) {
-            return nested;
+          // Direct sequence/choice/all
+          if (element.localName === 'sequence' ||
+            element.localName === 'choice' ||
+            element.localName === 'all') {
+            return element;
           }
-        }
 
-        // Follow group references to find underlying content model
-        if (element.localName === 'group') {
-          const ref = element.getAttribute('ref');
-          if (ref) {
-            const groupDef = this.schemaIndex.groups[ref];
-            if (groupDef) {
-              const nested = this.findDirectContentModel(groupDef);
-              if (nested) {
-                return nested;
+          // Look in extension/restriction
+          if (element.localName === 'extension' || element.localName === 'restriction') {
+            const nested = this.findDirectContentModel(element);
+            if (nested) {
+              return nested;
+            }
+          }
+
+          // Follow group references to find underlying content model
+          if (element.localName === 'group') {
+            const ref = element.getAttribute('ref');
+            if (ref) {
+              const groupDef = this.schemaIndex.groups[ref];
+              if (groupDef) {
+                const nested = this.findDirectContentModel(groupDef);
+                if (nested) {
+                  return nested;
+                }
               }
             }
           }
         }
       }
-    }
 
-    return null;
+      return null;
+    } finally {
+      this.profEnd('findDirectContentModel', __t0);
+    }
   }
 
   /**
@@ -2578,19 +2717,24 @@ export class Schema {
    * @returns Filtered elements that are valid as next elements
    */
   private getValidNextElementsInContentModel(contentModel: Element, previousSibling: Element, allChildren: Element[]): Element[] {
-    const modelType = contentModel.localName;
+    const __t0 = this.profStart();
+    try {
+      const modelType = contentModel.localName;
 
-    if (modelType === 'choice') {
-      return this.getValidNextInChoice(contentModel, previousSibling, allChildren);
-    } else if (modelType === 'sequence') {
-      return this.getValidNextInSequence(contentModel, previousSibling, allChildren);
-    } else if (modelType === 'all') {
-      // For all, any unused element can come next
-      return allChildren; // Simplified - could be enhanced to track used elements
+      if (modelType === 'choice') {
+        return this.getValidNextInChoice(contentModel, previousSibling, allChildren);
+      } else if (modelType === 'sequence') {
+        return this.getValidNextInSequence(contentModel, previousSibling, allChildren);
+      } else if (modelType === 'all') {
+        // For all, any unused element can come next
+        return allChildren; // Simplified - could be enhanced to track used elements
+      }
+
+      // Unknown model type, return all children
+      return allChildren;
+    } finally {
+      this.profEnd('getValidNextElementsInContentModel', __t0);
     }
-
-    // Unknown model type, return all children
-    return allChildren;
   }
 
   /**
@@ -2601,148 +2745,15 @@ export class Schema {
    * @returns Valid next elements
    */
   private getValidNextInChoice(choice: Element, previousSibling: Element, allChildren: Element[]): Element[] {
-    // If previousSibling belongs to a nested sequence option within this choice,
-    // continue inside that same sequence arm and also allow restarting that arm (choice repetition).
-    // IMPORTANT: Prefer scanning the direct alternatives of this choice first to avoid
-    // accidentally picking outer sequences (e.g., the actions sequence) that contain the element indirectly.
-    let nestedSeq: Element | null = null;
-    for (let i = 0; i < choice.childNodes.length && !nestedSeq; i++) {
-      const alt = choice.childNodes[i];
-      if (alt.nodeType !== 1) continue;
-      const el = alt as Element;
-      if (el.localName === 'sequence') {
-        if (this.itemContainsElement(el, previousSibling)) {
-          nestedSeq = el;
-          break;
-        }
-      } else if (el.localName === 'group') {
-        const ref = el.getAttribute('ref');
-        const grp = ref ? this.schemaIndex.groups[ref] : el;
-        if (grp) {
-          const model = this.findDirectContentModel(grp);
-          if (model && model.localName === 'choice') {
-            for (let j = 0; j < model.childNodes.length && !nestedSeq; j++) {
-              const mchild = model.childNodes[j];
-              if (mchild.nodeType !== 1) continue;
-              const mEl = mchild as Element;
-              if (mEl.localName === 'sequence' && this.itemContainsElement(mEl, previousSibling)) {
-                nestedSeq = mEl;
-                break;
-              }
-            }
-          } else if (model && model.localName === 'sequence' && this.itemContainsElement(model, previousSibling)) {
-            nestedSeq = model;
-            break;
-          }
-        }
-      }
-    }
-    if (!nestedSeq) {
-      // Fallback: broader search that resolves groups and nested structures
-      nestedSeq = this.findNestedSequenceContainingElement(choice, previousSibling);
-    }
-    if (nestedSeq) {
-      // Build a list of direct element items in the nested sequence along with occurs
-      const items: { name: string; minOccurs: number; maxOccurs: number | 'unbounded' }[] = [];
-      for (let i = 0; i < nestedSeq.childNodes.length; i++) {
-        const child = nestedSeq.childNodes[i];
-        if (child.nodeType !== 1) continue;
-        const el = child as Element;
-        if (el.localName === 'element') {
-          const name = el.getAttribute('name');
-          if (!name) continue;
-          const minOccurs = this.getEffectiveMinOccurs(el, nestedSeq);
-          const maxOccurs = this.getEffectiveMaxOccurs(el, nestedSeq);
-          items.push({ name, minOccurs, maxOccurs });
-        }
-        // Note: nested structures inside the nested sequence are not expected in this arm
-      }
-
-      const allowed = new Set<string>();
-      const previousSiblingName = previousSibling.getAttribute('name');
-      const prevIndex = items.findIndex(it => it.name === previousSiblingName);
-      if (prevIndex !== -1) {
-        // 1) Repetition of the current element if allowed
-        const cur = items[prevIndex];
-        if (cur.maxOccurs === 'unbounded' || (typeof cur.maxOccurs === 'number' && cur.maxOccurs > 1)) {
-          allowed.add(cur.name);
-        }
-
-        // 2) Subsequent items until we hit a required one (inclusive)
-        for (let i = prevIndex + 1; i < items.length; i++) {
-          allowed.add(items[i].name);
-          if (items[i].minOccurs >= 1) break;
-        }
-      }
-
-      // 3) Because the choice can typically repeat, allow restarting the same sequence arm
-      const seqStarts = this.getStartElementsOfSequence(nestedSeq, allChildren).map(e => e.getAttribute('name')!).filter(Boolean) as string[];
-      for (const n of seqStarts) allowed.add(n);
-
-      // Map back to actual Element nodes
-      const results: Element[] = [];
-      for (const name of allowed) {
-        const el = allChildren.find(e => e.getAttribute('name') === name);
-        if (el) results.push(el);
-      }
-      // Deduplicate preserving insertion order already handled by Set
-      return results;
-    }
-
-    // Otherwise, we are at the start of a choice occurrence; return only the start elements of each alternative.
-    return this.getElementsInChoice(choice, allChildren);
-  }
-
-  /**
-   * Get valid next elements in a sequence based on previous sibling
-   * @param sequence The sequence element
-   * @param previousSibling The name of the previous sibling
-   * @param allChildren All possible child elements for reference
-   * @returns Valid next elements in the sequence
-   */
-  private getValidNextInSequence(sequence: Element, previousSibling: Element, allChildren: Element[]): Element[] {
-    const sequenceItems: Element[] = [];
-
-    // Collect all sequence items (elements, choices, groups, etc.)
-    for (let i = 0; i < sequence.childNodes.length; i++) {
-      const child = sequence.childNodes[i];
-      if (child.nodeType === 1) {
-        sequenceItems.push(child as Element);
-      }
-    }
-
-    // Find the position of the previous sibling in the sequence
-    let previousPosition = -1;
-    let previousItem: Element | null = null;
-
-    const previousSiblingName = previousSibling.getAttribute('name');
-
-    for (let i = 0; i < sequenceItems.length; i++) {
-      const item = sequenceItems[i];
-
-      if (this.itemContainsElement(item, previousSibling)) {
-        previousPosition = i;
-        previousItem = item;
-        break;
-      }
-    }
-
-    if (previousPosition === -1) {
-      // Previous sibling not found in this sequence, return all children
-      return allChildren;
-    }
-
-    const validNext: Element[] = [];
-
-    // If the previous item is a choice, we should only allow continuation inside the alternative that contains previousSibling.
-    // Track non-start elements from sequence alternatives to avoid leaking them when not inside that sequence arm.
-    let prevChoiceNonStart: Set<string> | null = null;
-    let nestedChoiceAllowedNames: Set<string> | null = null;
-    if (previousItem && previousItem.localName === 'choice') {
-      // Prefer direct alternative scan first
+    const __t0 = this.profStart();
+    try {
+      // If previousSibling belongs to a nested sequence option within this choice,
+      // continue inside that same sequence arm and also allow restarting that arm (choice repetition).
+      // IMPORTANT: Prefer scanning the direct alternatives of this choice first to avoid
+      // accidentally picking outer sequences (e.g., the actions sequence) that contain the element indirectly.
       let nestedSeq: Element | null = null;
-      for (let i = 0; i < previousItem.childNodes.length && !nestedSeq; i++) {
-        const alt = previousItem.childNodes[i];
+      for (let i = 0; i < choice.childNodes.length && !nestedSeq; i++) {
+        const alt = choice.childNodes[i];
         if (alt.nodeType !== 1) continue;
         const el = alt as Element;
         if (el.localName === 'sequence') {
@@ -2752,12 +2763,12 @@ export class Schema {
           }
         } else if (el.localName === 'group') {
           const ref = el.getAttribute('ref');
-          const grp2 = ref ? this.schemaIndex.groups[ref] : el;
-          if (grp2) {
-            const model2 = this.findDirectContentModel(grp2);
-            if (model2 && model2.localName === 'choice') {
-              for (let j = 0; j < model2.childNodes.length && !nestedSeq; j++) {
-                const mchild = model2.childNodes[j];
+          const grp = ref ? this.schemaIndex.groups[ref] : el;
+          if (grp) {
+            const model = this.findDirectContentModel(grp);
+            if (model && model.localName === 'choice') {
+              for (let j = 0; j < model.childNodes.length && !nestedSeq; j++) {
+                const mchild = model.childNodes[j];
                 if (mchild.nodeType !== 1) continue;
                 const mEl = mchild as Element;
                 if (mEl.localName === 'sequence' && this.itemContainsElement(mEl, previousSibling)) {
@@ -2765,19 +2776,19 @@ export class Schema {
                   break;
                 }
               }
-            } else if (model2 && model2.localName === 'sequence' && this.itemContainsElement(model2, previousSibling)) {
-              nestedSeq = model2;
+            } else if (model && model.localName === 'sequence' && this.itemContainsElement(model, previousSibling)) {
+              nestedSeq = model;
               break;
             }
           }
         }
       }
       if (!nestedSeq) {
-        // Fallback: broader nested search
-        nestedSeq = this.findNestedSequenceContainingElement(previousItem, previousSibling);
+        // Fallback: broader search that resolves groups and nested structures
+        nestedSeq = this.findNestedSequenceContainingElement(choice, previousSibling);
       }
       if (nestedSeq) {
-        // Non-recursive computation for the nested sequence arm containing previousSibling
+        // Build a list of direct element items in the nested sequence along with occurs
         const items: { name: string; minOccurs: number; maxOccurs: number | 'unbounded' }[] = [];
         for (let i = 0; i < nestedSeq.childNodes.length; i++) {
           const child = nestedSeq.childNodes[i];
@@ -2790,221 +2801,364 @@ export class Schema {
             const maxOccurs = this.getEffectiveMaxOccurs(el, nestedSeq);
             items.push({ name, minOccurs, maxOccurs });
           }
+          // Note: nested structures inside the nested sequence are not expected in this arm
         }
-        const allowedNames = new Set<string>();
+
+        const allowed = new Set<string>();
+        const previousSiblingName = previousSibling.getAttribute('name');
         const prevIndex = items.findIndex(it => it.name === previousSiblingName);
         if (prevIndex !== -1) {
           // 1) Repetition of the current element if allowed
           const cur = items[prevIndex];
           if (cur.maxOccurs === 'unbounded' || (typeof cur.maxOccurs === 'number' && cur.maxOccurs > 1)) {
-            allowedNames.add(cur.name);
+            allowed.add(cur.name);
           }
-          // 2) Subsequent items until first required (inclusive)
+
+          // 2) Subsequent items until we hit a required one (inclusive)
           for (let i = prevIndex + 1; i < items.length; i++) {
-            allowedNames.add(items[i].name);
+            allowed.add(items[i].name);
             if (items[i].minOccurs >= 1) break;
           }
         }
-        // 3) Allow restarting the same arm (choice repetition)
-        const seqStarts = this.getStartElementsOfSequence(nestedSeq, allChildren);
-        for (const e of seqStarts) {
-          const n = e.getAttribute('name');
-          if (n) allowedNames.add(n);
-        }
-        // Remember allowed names coming from the nested choice arm
-        nestedChoiceAllowedNames = new Set(allowedNames);
-        // Map to actual Element nodes
-        for (const name of allowedNames) {
+
+        // 3) Because the choice can typically repeat, allow restarting the same sequence arm
+        const seqStarts = this.getStartElementsOfSequence(nestedSeq, allChildren).map(e => e.getAttribute('name')!).filter(Boolean) as string[];
+        for (const n of seqStarts) allowed.add(n);
+
+        // Map back to actual Element nodes
+        const results: Element[] = [];
+        for (const name of allowed) {
           const el = allChildren.find(e => e.getAttribute('name') === name);
-          if (el) validNext.push(el);
+          if (el) results.push(el);
         }
-      } else {
-        // previousSibling was one of the direct choice elements; allow following mandatory/optional items of outer sequence
-        for (let i = previousPosition + 1; i < sequenceItems.length; i++) {
-          const nextItem = sequenceItems[i];
-          const starts = this.getStartElementsFromItem(nextItem, allChildren);
-          validNext.push(...starts);
-          const minOccurs = this.getEffectiveMinOccurs(nextItem, sequence);
-          if (minOccurs >= 1) break;
+        // Deduplicate preserving insertion order already handled by Set
+        return results;
+      }
+
+      // Otherwise, we are at the start of a choice occurrence; return only the start elements of each alternative.
+      return this.getElementsInChoice(choice, allChildren);
+    } finally {
+      this.profEnd('getValidNextInChoice', __t0);
+    }
+  }
+
+  /**
+   * Get valid next elements in a sequence based on previous sibling
+   * @param sequence The sequence element
+   * @param previousSibling The name of the previous sibling
+   * @param allChildren All possible child elements for reference
+   * @returns Valid next elements in the sequence
+   */
+  private getValidNextInSequence(sequence: Element, previousSibling: Element, allChildren: Element[]): Element[] {
+    const __t0 = this.profStart();
+    try {
+      const sequenceItems: Element[] = [];
+
+      // Collect all sequence items (elements, choices, groups, etc.)
+      for (let i = 0; i < sequence.childNodes.length; i++) {
+        const child = sequence.childNodes[i];
+        if (child.nodeType === 1) {
+          sequenceItems.push(child as Element);
         }
       }
-      // Compute non-start elements from any sequence alternatives of this choice for later filtering
-      prevChoiceNonStart = this.getNonStartElementsInChoiceSequences(previousItem);
-    }
 
-    // If the previous item is a group, resolve its underlying model and delegate accordingly
-    if (previousItem && previousItem.localName === 'group') {
-      const ref = previousItem.getAttribute('ref');
-      const grp = ref ? this.schemaIndex.groups[ref] : previousItem;
-      if (grp) {
-        const model = this.findDirectContentModel(grp);
-        if (model) {
-          if (model.localName === 'choice') {
-            // Prefer direct alternative scan first inside the resolved choice
-            let nestedSeq: Element | null = null;
-            for (let i = 0; i < model.childNodes.length && !nestedSeq; i++) {
-              const alt = model.childNodes[i];
-              if (alt.nodeType !== 1) continue;
-              const el = alt as Element;
-              if (el.localName === 'sequence') {
-                if (this.itemContainsElement(el, previousSibling)) {
-                  nestedSeq = el;
-                  break;
-                }
-              } else if (el.localName === 'group') {
-                const ref = el.getAttribute('ref');
-                const grp2 = ref ? this.schemaIndex.groups[ref] : el;
-                if (grp2) {
-                  const model2 = this.findDirectContentModel(grp2);
-                  if (model2 && model2.localName === 'choice') {
-                    for (let j = 0; j < model2.childNodes.length && !nestedSeq; j++) {
-                      const mchild = model2.childNodes[j];
-                      if (mchild.nodeType !== 1) continue;
-                      const mEl = mchild as Element;
-                      if (mEl.localName === 'sequence' && this.itemContainsElement(mEl, previousSibling)) {
-                        nestedSeq = mEl;
-                        break;
-                      }
-                    }
-                  } else if (model2 && model2.localName === 'sequence' && this.itemContainsElement(model2, previousSibling)) {
-                    nestedSeq = model2;
+      // Find the position of the previous sibling in the sequence
+      let previousPosition = -1;
+      let previousItem: Element | null = null;
+
+      const previousSiblingName = previousSibling.getAttribute('name');
+
+      for (let i = 0; i < sequenceItems.length; i++) {
+        const item = sequenceItems[i];
+
+        if (this.itemContainsElement(item, previousSibling)) {
+          previousPosition = i;
+          previousItem = item;
+          break;
+        }
+      }
+
+      if (previousPosition === -1) {
+        // Previous sibling not found in this sequence, return all children
+        return allChildren;
+      }
+
+      const validNext: Element[] = [];
+
+      // If the previous item is a choice, we should only allow continuation inside the alternative that contains previousSibling.
+      // Track non-start elements from sequence alternatives to avoid leaking them when not inside that sequence arm.
+      let prevChoiceNonStart: Set<string> | null = null;
+      let nestedChoiceAllowedNames: Set<string> | null = null;
+      if (previousItem && previousItem.localName === 'choice') {
+        // Prefer direct alternative scan first
+        let nestedSeq: Element | null = null;
+        for (let i = 0; i < previousItem.childNodes.length && !nestedSeq; i++) {
+          const alt = previousItem.childNodes[i];
+          if (alt.nodeType !== 1) continue;
+          const el = alt as Element;
+          if (el.localName === 'sequence') {
+            if (this.itemContainsElement(el, previousSibling)) {
+              nestedSeq = el;
+              break;
+            }
+          } else if (el.localName === 'group') {
+            const ref = el.getAttribute('ref');
+            const grp2 = ref ? this.schemaIndex.groups[ref] : el;
+            if (grp2) {
+              const model2 = this.findDirectContentModel(grp2);
+              if (model2 && model2.localName === 'choice') {
+                for (let j = 0; j < model2.childNodes.length && !nestedSeq; j++) {
+                  const mchild = model2.childNodes[j];
+                  if (mchild.nodeType !== 1) continue;
+                  const mEl = mchild as Element;
+                  if (mEl.localName === 'sequence' && this.itemContainsElement(mEl, previousSibling)) {
+                    nestedSeq = mEl;
                     break;
                   }
                 }
+              } else if (model2 && model2.localName === 'sequence' && this.itemContainsElement(model2, previousSibling)) {
+                nestedSeq = model2;
+                break;
               }
             }
-            if (!nestedSeq) {
-              nestedSeq = this.findNestedSequenceContainingElement(model, previousSibling);
-            }
-            if (nestedSeq) {
-              // Compute allowed names within the nested sequence arm non-recursively
-              const items: { name: string; minOccurs: number; maxOccurs: number | 'unbounded' }[] = [];
-              for (let i = 0; i < nestedSeq.childNodes.length; i++) {
-                const child = nestedSeq.childNodes[i];
-                if (child.nodeType !== 1) continue;
-                const el = child as Element;
-                if (el.localName === 'element') {
-                  const name = el.getAttribute('name');
-                  if (!name) continue;
-                  const minOccurs = this.getEffectiveMinOccurs(el, nestedSeq);
-                  const maxOccurs = this.getEffectiveMaxOccurs(el, nestedSeq);
-                  items.push({ name, minOccurs, maxOccurs });
-                }
-              }
-              const allowedNames = new Set<string>();
-              const prevIndex = items.findIndex(it => it.name === previousSiblingName);
-              if (prevIndex !== -1) {
-                const cur = items[prevIndex];
-                if (cur.maxOccurs === 'unbounded' || (typeof cur.maxOccurs === 'number' && cur.maxOccurs > 1)) {
-                  allowedNames.add(cur.name);
-                }
-                for (let i = prevIndex + 1; i < items.length; i++) {
-                  allowedNames.add(items[i].name);
-                  if (items[i].minOccurs >= 1) break;
-                }
-              }
-              const seqStarts = this.getStartElementsOfSequence(nestedSeq, allChildren);
-              for (const e of seqStarts) {
-                const n = e.getAttribute('name');
-                if (n) allowedNames.add(n);
-              }
-              for (const name of allowedNames) {
-                const el = allChildren.find(e => e.getAttribute('name') === name);
-                if (el) validNext.push(el);
-              }
-            }
-          } else if (model.localName === 'sequence') {
-            const seqNext = this.getValidNextInSequence(model, previousSibling, allChildren);
-            validNext.push(...seqNext);
-          } else if (model.localName === 'all') {
-            // xs:all has no ordering; allow allChildren
-            validNext.push(...allChildren);
           }
         }
-      }
-    }
-
-    // Note: do not override sibling computation by diving into the previous element's inner model here.
-
-    // Check if the previous item can repeat; use effective maxOccurs (including inheritance from the parent sequence)
-    if (previousItem) {
-      const prevMaxOccurs = this.getEffectiveMaxOccurs(previousItem, sequence);
-      const prevCanRepeat = (prevMaxOccurs === 'unbounded') || (typeof prevMaxOccurs === 'number' && prevMaxOccurs > 1);
-      if (prevCanRepeat) {
-        if (previousItem.localName === 'choice') {
-          // Repeating a choice: allow all alternatives that can start a new occurrence
-          validNext.push(...this.getElementsInChoice(previousItem, allChildren));
-        } else if (previousItem.localName === 'group') {
-          // Repeating a group: respect its underlying model
-          const ref = previousItem.getAttribute('ref');
-          const grp = ref ? this.schemaIndex.groups[ref] : previousItem;
-          if (grp) {
-            const model = this.findDirectContentModel(grp);
-            if (model && model.localName === 'choice') {
-              validNext.push(...this.getElementsInChoice(model, allChildren));
-            } else if (model && model.localName === 'sequence') {
-              validNext.push(...this.getStartElementsOfSequence(model, allChildren));
-            } else {
-              const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSiblingName);
-              if (repeatElement) validNext.push(repeatElement);
+        if (!nestedSeq) {
+          // Fallback: broader nested search
+          nestedSeq = this.findNestedSequenceContainingElement(previousItem, previousSibling);
+        }
+        if (nestedSeq) {
+          // Non-recursive computation for the nested sequence arm containing previousSibling
+          const items: { name: string; minOccurs: number; maxOccurs: number | 'unbounded' }[] = [];
+          for (let i = 0; i < nestedSeq.childNodes.length; i++) {
+            const child = nestedSeq.childNodes[i];
+            if (child.nodeType !== 1) continue;
+            const el = child as Element;
+            if (el.localName === 'element') {
+              const name = el.getAttribute('name');
+              if (!name) continue;
+              const minOccurs = this.getEffectiveMinOccurs(el, nestedSeq);
+              const maxOccurs = this.getEffectiveMaxOccurs(el, nestedSeq);
+              items.push({ name, minOccurs, maxOccurs });
             }
           }
-        } else if (previousItem.localName === 'sequence') {
-          // Repeating a sequence item directly: allow its starts
-          validNext.push(...this.getStartElementsOfSequence(previousItem, allChildren));
+          const allowedNames = new Set<string>();
+          const prevIndex = items.findIndex(it => it.name === previousSiblingName);
+          if (prevIndex !== -1) {
+            // 1) Repetition of the current element if allowed
+            const cur = items[prevIndex];
+            if (cur.maxOccurs === 'unbounded' || (typeof cur.maxOccurs === 'number' && cur.maxOccurs > 1)) {
+              allowedNames.add(cur.name);
+            }
+            // 2) Subsequent items until first required (inclusive)
+            for (let i = prevIndex + 1; i < items.length; i++) {
+              allowedNames.add(items[i].name);
+              if (items[i].minOccurs >= 1) break;
+            }
+          }
+          // 3) Allow restarting the same arm (choice repetition)
+          const seqStarts = this.getStartElementsOfSequence(nestedSeq, allChildren);
+          for (const e of seqStarts) {
+            const n = e.getAttribute('name');
+            if (n) allowedNames.add(n);
+          }
+          // Remember allowed names coming from the nested choice arm
+          nestedChoiceAllowedNames = new Set(allowedNames);
+          // Map to actual Element nodes
+          for (const name of allowedNames) {
+            const el = allChildren.find(e => e.getAttribute('name') === name);
+            if (el) validNext.push(el);
+          }
         } else {
-          // Element or other item repeats itself
-          const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSiblingName);
-          if (repeatElement) validNext.push(repeatElement);
+          // previousSibling was one of the direct choice elements; allow following mandatory/optional items of outer sequence
+          for (let i = previousPosition + 1; i < sequenceItems.length; i++) {
+            const nextItem = sequenceItems[i];
+            const starts = this.getStartElementsFromItem(nextItem, allChildren);
+            validNext.push(...starts);
+            const minOccurs = this.getEffectiveMinOccurs(nextItem, sequence);
+            if (minOccurs >= 1) break;
+          }
+        }
+        // Compute non-start elements from any sequence alternatives of this choice for later filtering
+        prevChoiceNonStart = this.getNonStartElementsInChoiceSequences(previousItem);
+      }
+
+      // If the previous item is a group, resolve its underlying model and delegate accordingly
+      if (previousItem && previousItem.localName === 'group') {
+        const ref = previousItem.getAttribute('ref');
+        const grp = ref ? this.schemaIndex.groups[ref] : previousItem;
+        if (grp) {
+          const model = this.findDirectContentModel(grp);
+          if (model) {
+            if (model.localName === 'choice') {
+              // Prefer direct alternative scan first inside the resolved choice
+              let nestedSeq: Element | null = null;
+              for (let i = 0; i < model.childNodes.length && !nestedSeq; i++) {
+                const alt = model.childNodes[i];
+                if (alt.nodeType !== 1) continue;
+                const el = alt as Element;
+                if (el.localName === 'sequence') {
+                  if (this.itemContainsElement(el, previousSibling)) {
+                    nestedSeq = el;
+                    break;
+                  }
+                } else if (el.localName === 'group') {
+                  const ref = el.getAttribute('ref');
+                  const grp2 = ref ? this.schemaIndex.groups[ref] : el;
+                  if (grp2) {
+                    const model2 = this.findDirectContentModel(grp2);
+                    if (model2 && model2.localName === 'choice') {
+                      for (let j = 0; j < model2.childNodes.length && !nestedSeq; j++) {
+                        const mchild = model2.childNodes[j];
+                        if (mchild.nodeType !== 1) continue;
+                        const mEl = mchild as Element;
+                        if (mEl.localName === 'sequence' && this.itemContainsElement(mEl, previousSibling)) {
+                          nestedSeq = mEl;
+                          break;
+                        }
+                      }
+                    } else if (model2 && model2.localName === 'sequence' && this.itemContainsElement(model2, previousSibling)) {
+                      nestedSeq = model2;
+                      break;
+                    }
+                  }
+                }
+              }
+              if (!nestedSeq) {
+                nestedSeq = this.findNestedSequenceContainingElement(model, previousSibling);
+              }
+              if (nestedSeq) {
+                // Compute allowed names within the nested sequence arm non-recursively
+                const items: { name: string; minOccurs: number; maxOccurs: number | 'unbounded' }[] = [];
+                for (let i = 0; i < nestedSeq.childNodes.length; i++) {
+                  const child = nestedSeq.childNodes[i];
+                  if (child.nodeType !== 1) continue;
+                  const el = child as Element;
+                  if (el.localName === 'element') {
+                    const name = el.getAttribute('name');
+                    if (!name) continue;
+                    const minOccurs = this.getEffectiveMinOccurs(el, nestedSeq);
+                    const maxOccurs = this.getEffectiveMaxOccurs(el, nestedSeq);
+                    items.push({ name, minOccurs, maxOccurs });
+                  }
+                }
+                const allowedNames = new Set<string>();
+                const prevIndex = items.findIndex(it => it.name === previousSiblingName);
+                if (prevIndex !== -1) {
+                  const cur = items[prevIndex];
+                  if (cur.maxOccurs === 'unbounded' || (typeof cur.maxOccurs === 'number' && cur.maxOccurs > 1)) {
+                    allowedNames.add(cur.name);
+                  }
+                  for (let i = prevIndex + 1; i < items.length; i++) {
+                    allowedNames.add(items[i].name);
+                    if (items[i].minOccurs >= 1) break;
+                  }
+                }
+                const seqStarts = this.getStartElementsOfSequence(nestedSeq, allChildren);
+                for (const e of seqStarts) {
+                  const n = e.getAttribute('name');
+                  if (n) allowedNames.add(n);
+                }
+                for (const name of allowedNames) {
+                  const el = allChildren.find(e => e.getAttribute('name') === name);
+                  if (el) validNext.push(el);
+                }
+              }
+            } else if (model.localName === 'sequence') {
+              const seqNext = this.getValidNextInSequence(model, previousSibling, allChildren);
+              validNext.push(...seqNext);
+            } else if (model.localName === 'all') {
+              // xs:all has no ordering; allow allChildren
+              validNext.push(...allChildren);
+            }
+          }
         }
       }
-    }
 
-    // If the sequence itself can repeat (maxOccurs on xs:sequence), allow restarting the sequence
-    const seqMaxRaw = sequence.getAttribute('maxOccurs') || '1';
-    const seqCanRepeat = seqMaxRaw === 'unbounded' || (!isNaN(parseInt(seqMaxRaw)) && parseInt(seqMaxRaw) > 1);
-    if (seqCanRepeat) {
-      validNext.push(...this.getStartElementsOfSequence(sequence, allChildren));
-    }
+      // Note: do not override sibling computation by diving into the previous element's inner model here.
 
-    // Add elements that come after the previous position in the sequence (only when not staying within a nested choice arm)
-    for (let i = previousPosition + 1; i < sequenceItems.length; i++) {
-      const nextItem = sequenceItems[i];
-      const itemElements = this.getElementsFromSequenceItem(nextItem, allChildren);
-      validNext.push(...itemElements);
-
-      // If this item is required (minOccurs >= 1), stop here
-      // If it's optional (minOccurs = 0), continue to the next items
-      const minOccurs = this.getEffectiveMinOccurs(nextItem, sequence);
-      if (minOccurs >= 1) {
-        break; // Required item found, stop here
+      // Check if the previous item can repeat; use effective maxOccurs (including inheritance from the parent sequence)
+      if (previousItem) {
+        const prevMaxOccurs = this.getEffectiveMaxOccurs(previousItem, sequence);
+        const prevCanRepeat = (prevMaxOccurs === 'unbounded') || (typeof prevMaxOccurs === 'number' && prevMaxOccurs > 1);
+        if (prevCanRepeat) {
+          if (previousItem.localName === 'choice') {
+            // Repeating a choice: allow all alternatives that can start a new occurrence
+            validNext.push(...this.getElementsInChoice(previousItem, allChildren));
+          } else if (previousItem.localName === 'group') {
+            // Repeating a group: respect its underlying model
+            const ref = previousItem.getAttribute('ref');
+            const grp = ref ? this.schemaIndex.groups[ref] : previousItem;
+            if (grp) {
+              const model = this.findDirectContentModel(grp);
+              if (model && model.localName === 'choice') {
+                validNext.push(...this.getElementsInChoice(model, allChildren));
+              } else if (model && model.localName === 'sequence') {
+                validNext.push(...this.getStartElementsOfSequence(model, allChildren));
+              } else {
+                const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSiblingName);
+                if (repeatElement) validNext.push(repeatElement);
+              }
+            }
+          } else if (previousItem.localName === 'sequence') {
+            // Repeating a sequence item directly: allow its starts
+            validNext.push(...this.getStartElementsOfSequence(previousItem, allChildren));
+          } else {
+            // Element or other item repeats itself
+            const repeatElement = allChildren.find(elem => elem.getAttribute('name') === previousSiblingName);
+            if (repeatElement) validNext.push(repeatElement);
+          }
+        }
       }
-    }
 
-    // When previous item is a choice, avoid leaking non-start elements of its sequence alternatives
-    if (previousItem && previousItem.localName === 'choice' && prevChoiceNonStart && prevChoiceNonStart.size > 0) {
-      const filtered = validNext.filter(e => {
-        const name = e.getAttribute('name') || '';
-        if (!name) return false;
-        if (!prevChoiceNonStart!.has(name)) return true;
-        // If we are inside a nested sequence arm, keep only if explicitly allowed from that nested computation
-        return nestedChoiceAllowedNames ? nestedChoiceAllowedNames.has(name) : false;
+      // If the sequence itself can repeat (maxOccurs on xs:sequence), allow restarting the sequence
+      const seqMaxRaw = sequence.getAttribute('maxOccurs') || '1';
+      const seqCanRepeat = seqMaxRaw === 'unbounded' || (!isNaN(parseInt(seqMaxRaw)) && parseInt(seqMaxRaw) > 1);
+      if (seqCanRepeat) {
+        validNext.push(...this.getStartElementsOfSequence(sequence, allChildren));
+      }
+
+      // Add elements that come after the previous position in the sequence (only when not staying within a nested choice arm)
+      for (let i = previousPosition + 1; i < sequenceItems.length; i++) {
+        const nextItem = sequenceItems[i];
+        const itemElements = this.getElementsFromSequenceItem(nextItem, allChildren);
+        validNext.push(...itemElements);
+
+        // If this item is required (minOccurs >= 1), stop here
+        // If it's optional (minOccurs = 0), continue to the next items
+        const minOccurs = this.getEffectiveMinOccurs(nextItem, sequence);
+        if (minOccurs >= 1) {
+          break; // Required item found, stop here
+        }
+      }
+
+      // When previous item is a choice, avoid leaking non-start elements of its sequence alternatives
+      if (previousItem && previousItem.localName === 'choice' && prevChoiceNonStart && prevChoiceNonStart.size > 0) {
+        const filtered = validNext.filter(e => {
+          const name = e.getAttribute('name') || '';
+          if (!name) return false;
+          if (!prevChoiceNonStart!.has(name)) return true;
+          // If we are inside a nested sequence arm, keep only if explicitly allowed from that nested computation
+          return nestedChoiceAllowedNames ? nestedChoiceAllowedNames.has(name) : false;
+        });
+        validNext.length = 0;
+        validNext.push(...filtered);
+      }
+
+      // Deduplicate preserving order
+      const seen = new Set<string>();
+      const dedup = validNext.filter(e => {
+        const n = e.getAttribute('name') || '';
+        if (!n) return false;
+        if (seen.has(n)) return false;
+        seen.add(n);
+        return true;
       });
-      validNext.length = 0;
-      validNext.push(...filtered);
+
+      return dedup;
+    } finally {
+      this.profEnd('getValidNextInSequence', __t0);
     }
-
-    // Deduplicate preserving order
-    const seen = new Set<string>();
-    const dedup = validNext.filter(e => {
-      const n = e.getAttribute('name') || '';
-      if (!n) return false;
-      if (seen.has(n)) return false;
-      seen.add(n);
-      return true;
-    });
-
-    return dedup;
   }
 
 
@@ -3014,57 +3168,62 @@ export class Schema {
    * items like do_elseif/do_else when not continuing inside that sequence arm.
    */
   private getNonStartElementsInChoiceSequences(choice: Element): Set<string> {
-    const names = new Set<string>();
+    const __t0 = this.profStart();
+    try {
+      const names = new Set<string>();
 
-    const collectFromNode = (node: Element) => {
-      if (node.localName === 'sequence') {
-        let seenFirst = false;
-        for (let i = 0; i < node.childNodes.length; i++) {
-          const child = node.childNodes[i];
-          if (child.nodeType !== 1) continue;
-          const el = child as Element;
-          if (el.localName === 'element') {
-            const nm = el.getAttribute('name');
-            if (!nm) continue;
-            if (seenFirst) {
-              names.add(nm);
-            } else {
-              seenFirst = true;
+      const collectFromNode = (node: Element) => {
+        if (node.localName === 'sequence') {
+          let seenFirst = false;
+          for (let i = 0; i < node.childNodes.length; i++) {
+            const child = node.childNodes[i];
+            if (child.nodeType !== 1) continue;
+            const el = child as Element;
+            if (el.localName === 'element') {
+              const nm = el.getAttribute('name');
+              if (!nm) continue;
+              if (seenFirst) {
+                names.add(nm);
+              } else {
+                seenFirst = true;
+              }
+            } else if (el.localName === 'group') {
+              const ref = el.getAttribute('ref');
+              const grp = ref ? this.schemaIndex.groups[ref] : el;
+              if (grp) {
+                const model = this.findDirectContentModel(grp);
+                if (model) collectFromNode(model);
+              }
+            } else if (el.localName === 'choice' || el.localName === 'sequence') {
+              // Dive into nested structures if present
+              collectFromNode(el);
             }
-          } else if (el.localName === 'group') {
-            const ref = el.getAttribute('ref');
-            const grp = ref ? this.schemaIndex.groups[ref] : el;
-            if (grp) {
-              const model = this.findDirectContentModel(grp);
-              if (model) collectFromNode(model);
-            }
-          } else if (el.localName === 'choice' || el.localName === 'sequence') {
-            // Dive into nested structures if present
-            collectFromNode(el);
+          }
+        } else if (node.localName === 'group') {
+          const ref = node.getAttribute('ref');
+          const grp = ref ? this.schemaIndex.groups[ref] : node;
+          if (grp) {
+            const model = this.findDirectContentModel(grp);
+            if (model) collectFromNode(model);
+          }
+        } else if (node.localName === 'choice') {
+          for (let i = 0; i < node.childNodes.length; i++) {
+            const child = node.childNodes[i];
+            if (child.nodeType === 1) collectFromNode(child as Element);
           }
         }
-      } else if (node.localName === 'group') {
-        const ref = node.getAttribute('ref');
-        const grp = ref ? this.schemaIndex.groups[ref] : node;
-        if (grp) {
-          const model = this.findDirectContentModel(grp);
-          if (model) collectFromNode(model);
-        }
-      } else if (node.localName === 'choice') {
-        for (let i = 0; i < node.childNodes.length; i++) {
-          const child = node.childNodes[i];
-          if (child.nodeType === 1) collectFromNode(child as Element);
-        }
+      };
+
+      // Start from direct alternatives of the choice
+      for (let i = 0; i < choice.childNodes.length; i++) {
+        const child = choice.childNodes[i];
+        if (child.nodeType === 1) collectFromNode(child as Element);
       }
-    };
 
-    // Start from direct alternatives of the choice
-    for (let i = 0; i < choice.childNodes.length; i++) {
-      const child = choice.childNodes[i];
-      if (child.nodeType === 1) collectFromNode(child as Element);
+      return names;
+    } finally {
+      this.profEnd('getNonStartElementsInChoiceSequences', __t0);
     }
-
-    return names;
   }
 
   /**
@@ -3074,112 +3233,122 @@ export class Schema {
    * @returns True if the item contains the element
    */
   private itemContainsElement(item: Element, element: Element, visited?: Set<Element>): boolean {
-    // Initialize visited set for cycle detection across recursive traversals
-    if (!visited) visited = new Set<Element>();
-    let cached: WeakMap<Element, boolean> | undefined;
-    // Fast path via containsCache keyed by item Element and child name
-    const name = element.getAttribute('name') || '';
-    if (name) {
-      cached = this.cache.containsCache.get(item);
-      if (!cached) { cached = new WeakMap<Element, boolean>(); this.cache.containsCache.set(item, cached); }
-      const existing = cached.get(element);
-      if (existing !== undefined) { if (this.shouldProfileCaches) this.cacheStats.containsCache.hits++; return existing; }
-      if (this.shouldProfileCaches) this.cacheStats.containsCache.misses++;
-      // We'll compute and store before return below
-    }
+    const __t0 = this.profStart();
+    try {
+      // Initialize visited set for cycle detection across recursive traversals
+      if (!visited) visited = new Set<Element>();
+      let cached: WeakMap<Element, boolean> | undefined;
+      // Fast path via containsCache keyed by item Element and child name
+      const name = element.getAttribute('name') || '';
+      if (name) {
+        cached = this.cache.containsCache.get(item);
+        if (!cached) { cached = new WeakMap<Element, boolean>(); this.cache.containsCache.set(item, cached); }
+        const existing = cached.get(element);
+        if (existing !== undefined) { if (this.shouldProfileCaches) this.cacheStats.containsCache.hits++; return existing; }
+        if (this.shouldProfileCaches) this.cacheStats.containsCache.misses++;
+        // We'll compute and store before return below
+      }
 
-    if (item.localName === 'element') {
-      const res = (item === element);
-      if (cached) { cached.set(element, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
-      return res;
-    } else if (item.localName === 'choice') {
-      // Check if any element in the choice matches
-      const res = this.choiceContainsElement(item, element, visited);
-      if (cached) { cached.set(element, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
-      return res;
-    } else if (item.localName === 'sequence') {
-      if (!visited.has(item)) {
-        visited.add(item);
-        // Check any child of the sequence
-        for (let i = 0; i < item.childNodes.length; i++) {
-          const child = item.childNodes[i];
-          if (child.nodeType === 1) {
-            if (this.itemContainsElement(child as Element, element, visited)) {
-              if (cached) { cached.set(element, true); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
-              return true;
+      if (item.localName === 'element') {
+        const res = (item === element);
+        if (cached) { cached.set(element, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
+        return res;
+      } else if (item.localName === 'choice') {
+        // Check if any element in the choice matches
+        const res = this.choiceContainsElement(item, element, visited);
+        if (cached) { cached.set(element, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
+        return res;
+      } else if (item.localName === 'sequence') {
+        if (!visited.has(item)) {
+          visited.add(item);
+          // Check any child of the sequence
+          for (let i = 0; i < item.childNodes.length; i++) {
+            const child = item.childNodes[i];
+            if (child.nodeType === 1) {
+              if (this.itemContainsElement(child as Element, element, visited)) {
+                if (cached) { cached.set(element, true); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
+                return true;
+              }
+            }
+          }
+        }
+        if (cached) { cached.set(element, false); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
+        return false;
+      } else if (item.localName === 'group') {
+        if (!visited.has(item)) {
+          visited.add(item);
+          // Check if the group contains the element (resolve ref or definition)
+          const groupName = item.getAttribute('ref');
+          const grp = groupName ? this.schemaIndex.groups[groupName] : item;
+          if (grp) {
+            const model = this.findDirectContentModel(grp);
+            if (model) {
+              const res = this.itemContainsElement(model, element, visited);
+              if (cached) { cached.set(element, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
+              return res;
             }
           }
         }
       }
       if (cached) { cached.set(element, false); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
       return false;
-    } else if (item.localName === 'group') {
-      if (!visited.has(item)) {
-        visited.add(item);
-        // Check if the group contains the element (resolve ref or definition)
-        const groupName = item.getAttribute('ref');
-        const grp = groupName ? this.schemaIndex.groups[groupName] : item;
-        if (grp) {
-          const model = this.findDirectContentModel(grp);
-          if (model) {
-            const res = this.itemContainsElement(model, element, visited);
-            if (cached) { cached.set(element, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
-            return res;
-          }
-        }
-      }
+    } finally {
+      this.profEnd('itemContainsElement', __t0);
     }
-    if (cached) { cached.set(element, false); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
-    return false;
   }
 
   /**
    * Find a nested sequence within a choice that contains the specified element
    */
   private findNestedSequenceContainingElement(root: Element, elementItem: Element): Element | null {
-    const stack: Element[] = [root];
-    const visited = new Set<Element>();
-    let steps = 0;
-    const MAX_STEPS = 20000; // hard safety cap to avoid runaway traversals
-    while (stack.length) {
-      if (++steps > MAX_STEPS) break;
-      const node = stack.pop()!;
-      if (visited.has(node)) continue;
-      visited.add(node);
+    const __t0 = this.profStart();
+    try {
+      const stack: Element[] = [root];
+      const visited = new Set<Element>();
+      let steps = 0;
+      const MAX_STEPS = 20000; // hard safety cap to avoid runaway traversals
+      while (stack.length) {
+        if (++steps > MAX_STEPS) break;
+        const node = stack.pop()!;
+        if (visited.has(node)) continue;
+        visited.add(node);
 
-      // If this is a group, resolve to its model and traverse that instead of raw children
-      if (node.localName === 'group') {
-        const ref = node.getAttribute('ref');
-        const grp = ref ? this.schemaIndex.groups[ref] : node;
-        if (grp) {
-          const model = this.findDirectContentModel(grp);
-          if (model) {
-            // If resolved model is a sequence that contains the element, return it
-            if (model.localName === 'sequence' && this.itemContainsElement(model, elementItem)) {
-              return model;
+        // If this is a group, resolve to its model and traverse that instead of raw children
+        if (node.localName === 'group') {
+          const ref = node.getAttribute('ref');
+          const grp = ref ? this.schemaIndex.groups[ref] : node;
+          if (grp) {
+            const model = this.findDirectContentModel(grp);
+            if (model) {
+              // If resolved model is a sequence that contains the element, return it
+              if (model.localName === 'sequence' && this.itemContainsElement(model, elementItem)) {
+                return model;
+              }
+              // Otherwise, continue traversal within the resolved model
+              if (!visited.has(model)) stack.push(model);
+              continue;
             }
-            // Otherwise, continue traversal within the resolved model
-            if (!visited.has(model)) stack.push(model);
-            continue;
+          }
+        }
+
+        // Direct sequence detection
+        if (node.localName === 'sequence' && this.itemContainsElement(node, elementItem)) {
+          return node;
+        }
+
+        // Traverse children
+        for (let i = 0; i < node.childNodes.length; i++) {
+          const child = node.childNodes[i];
+          if (child.nodeType === 1) {
+            const el = child as Element;
+            if (!visited.has(el)) stack.push(el);
           }
         }
       }
-
-      // Direct sequence detection
-      if (node.localName === 'sequence' && this.itemContainsElement(node, elementItem)) {
-        return node;
-      }
-
-      // Traverse children
-      for (let i = 0; i < node.childNodes.length; i++) {
-        const child = node.childNodes[i];
-        if (child.nodeType === 1) {
-          const el = child as Element;
-          if (!visited.has(el)) stack.push(el);
-        }
-      }
+      return null;
+    } finally {
+      this.profEnd('findNestedSequenceContainingElement', __t0);
     }
-    return null;
   }
 
   /**
@@ -3189,42 +3358,47 @@ export class Schema {
    * @returns True if the choice contains the element
    */
   private choiceContainsElement(choice: Element, elementItem: Element, visited?: Set<Element>): boolean {
-    // Initialize visited set for cycle detection across recursive traversals
-    if (!visited) visited = new Set<Element>();
-    if (visited.has(choice)) return false;
-    visited.add(choice);
+    const __t0 = this.profStart();
+    try {
+      // Initialize visited set for cycle detection across recursive traversals
+      if (!visited) visited = new Set<Element>();
+      if (visited.has(choice)) return false;
+      visited.add(choice);
 
-    for (let i = 0; i < choice.childNodes.length; i++) {
-      const child = choice.childNodes[i];
-      if (child.nodeType === 1) {
-        const element = child as Element;
+      for (let i = 0; i < choice.childNodes.length; i++) {
+        const child = choice.childNodes[i];
+        if (child.nodeType === 1) {
+          const element = child as Element;
 
-        if (element.localName === 'element' && element === elementItem) {
-          return true;
-        } else if (element.localName === 'choice') {
-          if (this.choiceContainsElement(element, elementItem, visited)) {
+          if (element.localName === 'element' && element === elementItem) {
             return true;
-          }
-        } else if (element.localName === 'sequence') {
-          // A sequence can be an alternative in a choice (e.g., do_if/do_elseif/do_else)
-          // Delegate to generic itemContainsElement to search within the sequence
-          if (this.itemContainsElement(element, elementItem, visited)) {
-            return true;
-          }
-        } else if (element.localName === 'group') {
-          const groupName = element.getAttribute('ref');
-          const grp = groupName ? this.schemaIndex.groups[groupName] : element;
-          if (grp) {
-            const model = this.findDirectContentModel(grp);
-            if (model && this.itemContainsElement(model, elementItem, visited)) {
+          } else if (element.localName === 'choice') {
+            if (this.choiceContainsElement(element, elementItem, visited)) {
               return true;
+            }
+          } else if (element.localName === 'sequence') {
+            // A sequence can be an alternative in a choice (e.g., do_if/do_elseif/do_else)
+            // Delegate to generic itemContainsElement to search within the sequence
+            if (this.itemContainsElement(element, elementItem, visited)) {
+              return true;
+            }
+          } else if (element.localName === 'group') {
+            const groupName = element.getAttribute('ref');
+            const grp = groupName ? this.schemaIndex.groups[groupName] : element;
+            if (grp) {
+              const model = this.findDirectContentModel(grp);
+              if (model && this.itemContainsElement(model, elementItem, visited)) {
+                return true;
+              }
             }
           }
         }
       }
-    }
 
-    return false;
+      return false;
+    } finally {
+      this.profEnd('choiceContainsElement', __t0);
+    }
   }
 
   /**
@@ -3234,42 +3408,47 @@ export class Schema {
    * @returns Array of elements from the item
    */
   private getElementsFromSequenceItem(item: Element, allChildren: Element[]): Element[] {
-    if (item.localName === 'element') {
-      const elementName = item.getAttribute('name');
-      if (elementName) {
-        const element = allChildren.find(elem => elem.getAttribute('name') === elementName);
-        return element ? [element] : [];
-      }
-    } else if (item.localName === 'choice') {
-      return this.getElementsInChoice(item, allChildren);
-    } else if (item.localName === 'sequence') {
-      // When asked generically, return only the start-capable elements of this sequence
-      return this.getStartElementsOfSequence(item, allChildren);
-    } else if (item.localName === 'group') {
-      const groupName = item.getAttribute('ref');
-      const grp = groupName ? this.schemaIndex.groups[groupName] : item;
-      if (grp) {
-        const model = this.findDirectContentModel(grp);
-        if (model) {
-          if (model.localName === 'choice') {
-            return this.getElementsInChoice(model, allChildren);
-          } else if (model.localName === 'sequence') {
-            return this.getStartElementsOfSequence(model, allChildren);
-          } else if (model.localName === 'all') {
-            const results: Element[] = [];
-            for (let j = 0; j < model.childNodes.length; j++) {
-              const allChild = model.childNodes[j];
-              if (allChild.nodeType === 1) {
-                results.push(...this.getStartElementsFromItem(allChild as Element, allChildren));
+    const __t0 = this.profStart();
+    try {
+      if (item.localName === 'element') {
+        const elementName = item.getAttribute('name');
+        if (elementName) {
+          const element = allChildren.find(elem => elem.getAttribute('name') === elementName);
+          return element ? [element] : [];
+        }
+      } else if (item.localName === 'choice') {
+        return this.getElementsInChoice(item, allChildren);
+      } else if (item.localName === 'sequence') {
+        // When asked generically, return only the start-capable elements of this sequence
+        return this.getStartElementsOfSequence(item, allChildren);
+      } else if (item.localName === 'group') {
+        const groupName = item.getAttribute('ref');
+        const grp = groupName ? this.schemaIndex.groups[groupName] : item;
+        if (grp) {
+          const model = this.findDirectContentModel(grp);
+          if (model) {
+            if (model.localName === 'choice') {
+              return this.getElementsInChoice(model, allChildren);
+            } else if (model.localName === 'sequence') {
+              return this.getStartElementsOfSequence(model, allChildren);
+            } else if (model.localName === 'all') {
+              const results: Element[] = [];
+              for (let j = 0; j < model.childNodes.length; j++) {
+                const allChild = model.childNodes[j];
+                if (allChild.nodeType === 1) {
+                  results.push(...this.getStartElementsFromItem(allChild as Element, allChildren));
+                }
               }
+              return results;
             }
-            return results;
           }
         }
       }
-    }
 
-    return [];
+      return [];
+    } finally {
+      this.profEnd('getElementsFromSequenceItem', __t0);
+    }
   }
 
   /**
@@ -3279,43 +3458,46 @@ export class Schema {
    * @returns Array of elements that are options in the choice
    */
   private getElementsInChoice(choice: Element, allChildren: Element[]): Element[] {
-    const choiceElements: Element[] = [];
+    const __t0 = this.profStart();
+    try {
+      const choiceElements: Element[] = [];
 
-    for (let i = 0; i < choice.childNodes.length; i++) {
-      const child = choice.childNodes[i];
-      if (child.nodeType === 1) {
-        const element = child as Element;
+      for (let i = 0; i < choice.childNodes.length; i++) {
+        const child = choice.childNodes[i];
+        if (child.nodeType === 1) {
+          const element = child as Element;
 
-        if (element.localName === 'element') {
-          const elementName = element.getAttribute('name');
-          if (elementName) {
-            const foundElement = allChildren.find(elem => elem.getAttribute('name') === elementName);
-            if (foundElement) {
-              choiceElements.push(foundElement);
+          if (element.localName === 'element') {
+            const elementName = element.getAttribute('name');
+            if (elementName) {
+              const foundElement = allChildren.find(elem => elem.getAttribute('name') === elementName);
+              if (foundElement) {
+                choiceElements.push(foundElement);
+              }
             }
-          }
-        } else if (element.localName === 'choice') {
-          // Nested choice: include only its start-capable options
-          choiceElements.push(...this.getElementsInChoice(element, allChildren));
-        } else if (element.localName === 'sequence') {
-          // Sequence within choice: only include elements that can start that sequence (not follow-up-only items)
-          choiceElements.push(...this.getStartElementsOfSequence(element, allChildren));
-        } else if (element.localName === 'group') {
-          // Resolve group (ref or definition) to its direct content model and include start-capable options
-          const groupName = element.getAttribute('ref');
-          const grp = groupName ? this.schemaIndex.groups[groupName] : element;
-          if (grp) {
-            const model = this.findDirectContentModel(grp);
-            if (model) {
-              if (model.localName === 'choice') {
-                choiceElements.push(...this.getElementsInChoice(model, allChildren));
-              } else if (model.localName === 'sequence') {
-                choiceElements.push(...this.getStartElementsOfSequence(model, allChildren));
-              } else if (model.localName === 'all') {
-                for (let j = 0; j < model.childNodes.length; j++) {
-                  const allChild = model.childNodes[j];
-                  if (allChild.nodeType === 1) {
-                    choiceElements.push(...this.getStartElementsFromItem(allChild as Element, allChildren));
+          } else if (element.localName === 'choice') {
+            // Nested choice: include only its start-capable options
+            choiceElements.push(...this.getElementsInChoice(element, allChildren));
+          } else if (element.localName === 'sequence') {
+            // Sequence within choice: only include elements that can start that sequence (not follow-up-only items)
+            choiceElements.push(...this.getStartElementsOfSequence(element, allChildren));
+          } else if (element.localName === 'group') {
+            // Resolve group (ref or definition) to its direct content model and include start-capable options
+            const groupName = element.getAttribute('ref');
+            const grp = groupName ? this.schemaIndex.groups[groupName] : element;
+            if (grp) {
+              const model = this.findDirectContentModel(grp);
+              if (model) {
+                if (model.localName === 'choice') {
+                  choiceElements.push(...this.getElementsInChoice(model, allChildren));
+                } else if (model.localName === 'sequence') {
+                  choiceElements.push(...this.getStartElementsOfSequence(model, allChildren));
+                } else if (model.localName === 'all') {
+                  for (let j = 0; j < model.childNodes.length; j++) {
+                    const allChild = model.childNodes[j];
+                    if (allChild.nodeType === 1) {
+                      choiceElements.push(...this.getStartElementsFromItem(allChild as Element, allChildren));
+                    }
                   }
                 }
               }
@@ -3323,78 +3505,90 @@ export class Schema {
           }
         }
       }
-    }
 
-    return choiceElements;
+      return choiceElements;
+    } finally {
+      this.profEnd('getElementsInChoice', __t0);
+    }
   }
 
   /**
    * Get the set of elements that can legally start the provided sequence, honoring minOccurs on leading items.
    */
   private getStartElementsOfSequence(seq: Element, allChildren: Element[]): Element[] {
-    const results: Element[] = [];
-    for (let i = 0; i < seq.childNodes.length; i++) {
-      const child = seq.childNodes[i];
-      if (child.nodeType !== 1) continue;
-      const item = child as Element;
-      // Include start elements of this item
-      const startElems = this.getStartElementsFromItem(item, allChildren);
-      results.push(...startElems);
-      // Stop if this item is required; otherwise, continue to next optional item
-      const minOccurs = this.getEffectiveMinOccurs(item, seq);
-      if (minOccurs >= 1) break;
+    const __t0 = this.profStart();
+    try {
+      const results: Element[] = [];
+      for (let i = 0; i < seq.childNodes.length; i++) {
+        const child = seq.childNodes[i];
+        if (child.nodeType !== 1) continue;
+        const item = child as Element;
+        // Include start elements of this item
+        const startElems = this.getStartElementsFromItem(item, allChildren);
+        results.push(...startElems);
+        // Stop if this item is required; otherwise, continue to next optional item
+        const minOccurs = this.getEffectiveMinOccurs(item, seq);
+        if (minOccurs >= 1) break;
+      }
+      // De-duplicate preserving order
+      const seen = new Set<string>();
+      return results.filter(e => {
+        const name = e.getAttribute('name') || '';
+        if (!name || seen.has(name)) return false;
+        seen.add(name);
+        return true;
+      });
+    } finally {
+      this.profEnd('getStartElementsOfSequence', __t0);
     }
-    // De-duplicate preserving order
-    const seen = new Set<string>();
-    return results.filter(e => {
-      const name = e.getAttribute('name') || '';
-      if (!name || seen.has(name)) return false;
-      seen.add(name);
-      return true;
-    });
   }
 
   /**
    * Return the elements that can appear at the start position of a sequence item.
    */
   private getStartElementsFromItem(item: Element, allChildren: Element[]): Element[] {
-    if (item.localName === 'element') {
-      const elementName = item.getAttribute('name');
-      if (elementName) {
-        const foundElement = allChildren.find(e => e.getAttribute('name') === elementName);
-        return foundElement ? [foundElement] : [];
-      }
-      return [];
-    } else if (item.localName === 'choice') {
-      return this.getElementsInChoice(item, allChildren);
-    } else if (item.localName === 'sequence') {
-      return this.getStartElementsOfSequence(item, allChildren);
-    } else if (item.localName === 'group') {
-      // Resolve group (ref or definition) to its direct content model
-      const groupName = item.getAttribute('ref');
-      const grp = groupName ? this.schemaIndex.groups[groupName] : item;
-      if (grp) {
-        const model = this.findDirectContentModel(grp);
-        if (model) {
-          if (model.localName === 'choice') {
-            return this.getElementsInChoice(model, allChildren);
-          } else if (model.localName === 'sequence') {
-            return this.getStartElementsOfSequence(model, allChildren);
-          } else if (model.localName === 'all') {
-            const results: Element[] = [];
-            for (let j = 0; j < model.childNodes.length; j++) {
-              const allChild = model.childNodes[j];
-              if (allChild.nodeType === 1) {
-                results.push(...this.getStartElementsFromItem(allChild as Element, allChildren));
+    const __t0 = this.profStart();
+    try {
+      if (item.localName === 'element') {
+        const elementName = item.getAttribute('name');
+        if (elementName) {
+          const foundElement = allChildren.find(e => e.getAttribute('name') === elementName);
+          return foundElement ? [foundElement] : [];
+        }
+        return [];
+      } else if (item.localName === 'choice') {
+        return this.getElementsInChoice(item, allChildren);
+      } else if (item.localName === 'sequence') {
+        return this.getStartElementsOfSequence(item, allChildren);
+      } else if (item.localName === 'group') {
+        // Resolve group (ref or definition) to its direct content model
+        const groupName = item.getAttribute('ref');
+        const grp = groupName ? this.schemaIndex.groups[groupName] : item;
+        if (grp) {
+          const model = this.findDirectContentModel(grp);
+          if (model) {
+            if (model.localName === 'choice') {
+              return this.getElementsInChoice(model, allChildren);
+            } else if (model.localName === 'sequence') {
+              return this.getStartElementsOfSequence(model, allChildren);
+            } else if (model.localName === 'all') {
+              const results: Element[] = [];
+              for (let j = 0; j < model.childNodes.length; j++) {
+                const allChild = model.childNodes[j];
+                if (allChild.nodeType === 1) {
+                  results.push(...this.getStartElementsFromItem(allChild as Element, allChildren));
+                }
               }
+              return results;
             }
-            return results;
           }
         }
+        return [];
       }
       return [];
+    } finally {
+      this.profEnd('getStartElementsFromItem', __t0);
     }
-    return [];
   }
 
   /**
@@ -3527,6 +3721,7 @@ export class Schema {
    */
   public dispose(): void {
     this.printCacheStats();
+    this.printMethodStats();
     this.initializeCaches();
   }
 }
