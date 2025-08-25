@@ -3491,22 +3491,28 @@ export class Schema {
       const name = element.getAttribute('name') || '';
       if (name) {
         cached = this.cache.containsCache.get(item);
-        if (!cached) { cached = new WeakMap<Element, boolean>(); this.cache.containsCache.set(item, cached); }
-        const existing = cached.get(element);
-        if (existing !== undefined) { if (this.shouldProfileCaches) this.cacheStats.containsCache.hits++; return existing; }
+        if (cached) {
+          const existing = cached.get(element);
+          if (existing !== undefined) {
+            if (this.shouldProfileCaches) this.cacheStats.containsCache.hits++;
+            return existing;
+          }
+        } else {
+          cached = new WeakMap<Element, boolean>();
+          this.cache.containsCache.set(item, cached);
+        }
         if (this.shouldProfileCaches) this.cacheStats.containsCache.misses++;
         // We'll compute and store before return below
       }
 
+      let result = false;
       if (item.localName === 'element') {
         const res = (item === element);
-        if (cached) { cached.set(element, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
-        return res;
+        result = res;
       } else if (item.localName === 'choice') {
         // Check if any element in the choice matches
         const res = this.choiceContainsElement(item, element, visited);
-        if (cached) { cached.set(element, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
-        return res;
+        result = res;
       } else if (item.localName === 'sequence') {
         if (!visited.has(item)) {
           visited.add(item);
@@ -3515,14 +3521,12 @@ export class Schema {
             const child = item.childNodes[i];
             if (child.nodeType === 1) {
               if (this.itemContainsElement(child as Element, element, visited)) {
-                if (cached) { cached.set(element, true); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
-                return true;
+                result = true;
+                break;
               }
             }
           }
         }
-        if (cached) { cached.set(element, false); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
-        return false;
       } else if (item.localName === 'group') {
         if (!visited.has(item)) {
           visited.add(item);
@@ -3534,13 +3538,15 @@ export class Schema {
             if (model) {
               const res = this.itemContainsElement(model, element, visited);
               if (cached) { cached.set(element, res); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
-              return res;
+              result = res;
             }
           }
         }
       }
-      if (cached) { cached.set(element, false); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
-      return false;
+
+      if (cached) { cached.set(element, result); if (this.shouldProfileCaches) this.cacheStats.containsCache.sets++; }
+      return result;
+
     } finally {
       if (__profiling) this.profEnd('itemContainsElement', __t0);
     }
