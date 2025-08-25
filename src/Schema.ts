@@ -28,7 +28,7 @@ interface HierarchyCache {
   enhancedAttributesCache: WeakMap<Element, EnhancedAttributeInfo[]>;
   elementDefinitionCache: Map<string, Element | undefined>; // New cache for getElementDefinition
   // Performance caches (not size-limited via ensureCacheSize):
-  childElementsByDef?: WeakMap<Element, Element[]>; // cache of findAllElementsInDefinition
+  elementsInDefinition: WeakMap<Element, Element[]>; // cache of findAllElementsInDefinition
   elementsInDefinitionByName: WeakMap<Element, Map<string, Element[]>>; // cache of findElementsInDefinition
   contentModelCache?: WeakMap<Element, Element | null>; // cache of findContentModel
   annotationCache?: WeakMap<Element, string>; // cache of extractAnnotationText/type fallback
@@ -47,7 +47,7 @@ type CacheStats = {
   enhancedAttributesCache: CacheCounter;
   elementDefinitionCache: CacheCounter;
   elementsInDefinitionByName: CacheCounter;
-  childElementsByDef: CacheCounter;
+  elementsInDefinition: CacheCounter;
   contentModelCache: CacheCounter;
   annotationCache: CacheCounter;
   possibleChildrenResultCache: CacheCounter;
@@ -154,7 +154,7 @@ export class Schema {
       attributeCache: new WeakMap<Element, AttributeInfo[]>(),
       enhancedAttributesCache: new WeakMap<Element, EnhancedAttributeInfo[]>(),
       elementDefinitionCache: new Map(),
-      childElementsByDef: new WeakMap<Element, Element[]>(),
+      elementsInDefinition: new WeakMap<Element, Element[]>(),
       elementsInDefinitionByName: new WeakMap<Element, Map<string, Element[]>>(),
       contentModelCache: new WeakMap<Element, Element | null>(),
       annotationCache: new WeakMap<Element, string>(),
@@ -174,7 +174,7 @@ export class Schema {
       enhancedAttributesCache: zero(),
       elementDefinitionCache: zero(),
       elementsInDefinitionByName: zero(),
-      childElementsByDef: zero(),
+      elementsInDefinition: zero(),
       contentModelCache: zero(),
       annotationCache: zero(),
       possibleChildrenResultCache: zero(),
@@ -1361,6 +1361,14 @@ export class Schema {
     try {
       if (!parentDef) return [];
 
+      const cache = this.cache.elementsInDefinition;
+      const cached = cache.get(parentDef);
+      if (cached) {
+        if (this.shouldProfileCaches) this.cacheStats.elementsInDefinition.hits++;
+        return cached;
+      }
+      if (this.shouldProfileCaches) this.cacheStats.elementsInDefinition.misses++;
+
       const results: Element[] = [];
 
       // Get the actual type definition to search in
@@ -1438,7 +1446,11 @@ export class Schema {
 
       searchInNode(typeNode);
 
+      cache.set(parentDef, results);
+      if (this.shouldProfileCaches) this.cacheStats.elementsInDefinition.sets++;
+
       return results;
+
     } finally {
       if (__profiling) {
         this.profEnd('findAllElementsInDefinition', __t0);
@@ -2570,7 +2582,7 @@ export class Schema {
 
       // Get all possible child elements
       const tFindAll0 = (globalThis.performance?.now?.() ?? Date.now());
-      const childElements = this.getChildElementsCached(elementDef);
+      const childElements = this.findAllElementsInDefinition(elementDef);
       tFindAll += (globalThis.performance?.now?.() ?? Date.now()) - tFindAll0;
 
       let filteredElements: Element[];
@@ -2660,7 +2672,7 @@ export class Schema {
       if (byChild.has(elementName)) { if (this.shouldProfileCaches) this.cacheStats.validChildCache.hits++; return byChild.get(elementName)!; }
       this.cacheStats.validChildCache.misses++
       // Discover all immediate child element candidates (cached)
-      const allChildren = this.getChildElementsCached(parentDef);
+      const allChildren = this.findAllElementsInDefinition(parentDef);
       if (allChildren.length === 0) { byChild.set(elementName, false); if (this.shouldProfileCaches) this.cacheStats.validChildCache.sets++; return false; }
 
       // Find the concrete Element node for the requested child; if not declared, it's invalid
@@ -2860,24 +2872,6 @@ export class Schema {
       return model;
     } finally {
       if (__profiling) this.profEnd('getCachedContentModel', __t0);
-    }
-  }
-
-  // Cached child elements discovery
-  private getChildElementsCached(def: Element): Element[] {
-    const __profiling = this.shouldProfileMethods;
-    const __t0 = __profiling ? this.profStart() : 0;
-    try {
-      const cache = this.cache.childElementsByDef!;
-      const cached = cache.get(def);
-      if (cached) { if (this.shouldProfileCaches) this.cacheStats.childElementsByDef.hits++; return cached; }
-      if (this.shouldProfileCaches) this.cacheStats.childElementsByDef.misses++;
-      const elems = this.findAllElementsInDefinition(def);
-      cache.set(def, elems);
-      if (this.shouldProfileCaches) this.cacheStats.childElementsByDef.sets++;
-      return elems;
-    } finally {
-      if (__profiling) this.profEnd('getChildElementsCached', __t0);
     }
   }
 
