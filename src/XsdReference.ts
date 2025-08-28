@@ -552,8 +552,12 @@ export class XsdReference {
    * @param element The XML element to extract annotation from
    * @returns The annotation text, or undefined if no annotation found
    */
-  public static extractAnnotationText(element: Element): string | undefined {
-    return Schema.extractAnnotationText(element);
+  public extractAnnotationText(schemaName: string, element: Element): string | undefined {
+    const schema = this.loadSchema(schemaName);
+    if (!schema) {
+      return undefined;
+    }
+    return schema.getAnnotationCached(element);
   }
 
   /**

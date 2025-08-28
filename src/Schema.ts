@@ -949,7 +949,6 @@ export class Schema {
       if (this.cache.elementDefinitionCache.has(fullCacheKey)) {
         if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.hits++;
         const cached = this.cache.elementDefinitionCache.get(fullCacheKey);
-        if (cached) this.enrichElementAnnotationFromTypeIfMissing(cached);
         return cached;
       }
       if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.misses++;
@@ -959,7 +958,6 @@ export class Schema {
         this.cache.elementDefinitionCache.set(fullCacheKey, elementFromMap);
         if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.sets++;
         this.ensureCacheSize();
-        this.enrichElementAnnotationFromTypeIfMissing(elementFromMap);
         return elementFromMap;
       }
 
@@ -976,7 +974,6 @@ export class Schema {
             this.cache.elementDefinitionCache.set(fullCacheKey, cachedElement);
             if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.sets++;
             this.ensureCacheSize();
-            this.enrichElementAnnotationFromTypeIfMissing(cachedElement);
             return cachedElement;
           }
         }
@@ -1020,11 +1017,6 @@ export class Schema {
         }
       }
 
-      // If found, enrich with annotation structure from referenced type when missing
-      if (result) {
-        this.enrichElementAnnotationFromTypeIfMissing(result);
-      }
-
       // Cache the final result (even if undefined)
       this.cache.elementDefinitionCache.set(fullCacheKey, result);
       if (this.shouldProfileCaches) this.cacheStats.elementDefinitionCache.sets++;
@@ -1033,119 +1025,6 @@ export class Schema {
       return result;
     } finally {
       if (__profiling) this.profEnd('getElementDefinition', __t0);
-    }
-  }
-
-  // Clone xs:annotation/xs:documentation from the referenced type onto the element
-  // if the element lacks its own annotation with text. No hardcoding: fully data-driven by XSD.
-  private enrichElementAnnotationFromTypeIfMissing(elementDef: Element): void {
-    const __profiling = this.shouldProfileMethods;
-    const __t0 = __profiling ? this.profStart() : 0;
-    try {
-      if (!elementDef || elementDef.nodeType !== 1) return;
-      if (elementDef.localName !== 'element') return;
-
-      // Already enriched or already has an annotation node
-      if ((elementDef as Element).getAttribute('data-annotation-enriched') === '1') return;
-      for (let i = 0; i < elementDef.childNodes.length; i++) {
-        const c = elementDef.childNodes[i];
-        if (c.nodeType === 1 && (c as Element).localName === 'annotation') {
-          // Has its own annotation structure already
-          // Additionally ensure it has text; if empty, we still respect existing structure and don't override
-          return;
-        }
-      }
-
-      const typeName = elementDef.getAttribute('type');
-      if (!typeName) return;
-      const unprefixed = typeName.replace(/^.*:/, '');
-      const typeDef = this.schemaIndex.types[typeName] || this.schemaIndex.types[unprefixed];
-      if (!typeDef) return;
-
-      // Ensure the type actually contains documentation text
-      const typeDocText = Schema.extractAnnotationText(typeDef);
-      if (!typeDocText || typeDocText.trim() === '') return;
-
-      // Find an annotation element to clone (prefer direct child)
-      const typeAnnotationEl = this.findFirstAnnotationElement(typeDef);
-      if (!typeAnnotationEl) return;
-
-      const cloned = typeAnnotationEl.cloneNode(true);
-      try {
-        elementDef.appendChild(cloned);
-        (elementDef as Element).setAttribute('data-annotation-enriched', '1');
-        // Sync annotation cache so getAnnotationCached returns the new text immediately
-        if (this.cache && this.cache.annotationCache) {
-          this.cache.annotationCache.set(elementDef, typeDocText);
-        }
-      } catch {
-        // Ignore DOM append errors silently; non-critical enhancement
-      }
-    } finally {
-      if (__profiling) {
-        this.profEnd('enrichElementAnnotationFromTypeIfMissing', __t0);
-      }
-    }
-  }
-
-  // Locate the first xs:annotation element in the given node (direct child preferred, otherwise bounded DFS)
-  private findFirstAnnotationElement(node: Element): Element | null {
-    const __profiling = this.shouldProfileMethods;
-    const __t0 = __profiling ? this.profStart() : 0;
-    try {
-      // Prefer direct child annotation
-      for (let i = 0; i < node.childNodes.length; i++) {
-        const c = node.childNodes[i];
-        if (c.nodeType === 1 && (c as Element).localName === 'annotation') {
-          // Ensure documentation with some text exists inside
-          const hasDocText = this.annotationElementHasText(c as Element);
-          if (hasDocText) return c as Element;
-        }
-      }
-      // Bounded DFS to avoid heavy scans
-      const stack: { el: Element; depth: number }[] = [];
-      for (let i = 0; i < node.childNodes.length; i++) {
-        const c = node.childNodes[i];
-        if (c.nodeType === 1) stack.push({ el: c as Element, depth: 1 });
-      }
-      const maxDepth = 4;
-      while (stack.length) {
-        const { el, depth } = stack.pop()!;
-        if (el.localName === 'annotation' && this.annotationElementHasText(el)) {
-          return el;
-        }
-        if (depth >= maxDepth) continue;
-        for (let i = 0; i < el.childNodes.length; i++) {
-          const c = el.childNodes[i];
-          if (c.nodeType === 1) stack.push({ el: c as Element, depth: depth + 1 });
-        }
-      }
-      return null;
-    } finally {
-      if (__profiling) {
-        this.profEnd('findFirstAnnotationElement', __t0);
-      }
-    }
-  }
-
-  // Check if an xs:annotation element contains xs:documentation with non-empty text
-  private annotationElementHasText(annotationEl: Element): boolean {
-    const __profiling = this.shouldProfileMethods;
-    const __t0 = __profiling ? this.profStart() : 0;
-    try {
-      for (let i = 0; i < annotationEl.childNodes.length; i++) {
-        const child = annotationEl.childNodes[i];
-        if (child.nodeType === 1 && (child as Element).localName === 'documentation') {
-          const docEl = child as Element;
-          const text = (docEl.textContent || '').trim();
-          if (text.length > 0) return true;
-        }
-      }
-      return false;
-    } finally {
-      if (__profiling) {
-        this.profEnd('annotationElementHasText', __t0);
-      }
     }
   }
 
@@ -1633,7 +1512,7 @@ export class Schema {
         enhancedAttr.location = Schema.getElementLocation(attr.node);
 
         // Extract attribute's own annotation
-        const annotation = Schema.extractAnnotationText(attr.node);
+        const annotation = this.getAnnotationCached(attr.node);
         if (annotation) {
           enhancedAttr.annotation = annotation;
         }
@@ -2477,30 +2356,38 @@ export class Schema {
   /**
    * Extract annotation text from an XSD element's xs:annotation/xs:documentation
    */
-  public static extractAnnotationText(element: Element): string | undefined {
-    // Look for xs:annotation child element
-    for (let i = 0; i < element.childNodes.length; i++) {
-      const child = element.childNodes[i];
-      if (child.nodeType === 1 && (child as Element).localName === 'annotation') {
-        const annotationElement = child as Element;
+  public extractAnnotationText(element: Element): string | undefined {
+    const __profiling = this.shouldProfileMethods;
+    const __t0 = __profiling ? this.profStart() : 0;
+    try {
+      // Look for xs:annotation child element
+      for (let i = 0; i < element.childNodes.length; i++) {
+        const child = element.childNodes[i];
+        if (child.nodeType === 1 && (child as Element).localName === 'annotation') {
+          const annotationElement = child as Element;
 
-        // Look for xs:documentation within xs:annotation
-        for (let j = 0; j < annotationElement.childNodes.length; j++) {
-          const docChild = annotationElement.childNodes[j];
-          if (docChild.nodeType === 1 && (docChild as Element).localName === 'documentation') {
-            const docElement = docChild as Element;
+          // Look for xs:documentation within xs:annotation
+          for (let j = 0; j < annotationElement.childNodes.length; j++) {
+            const docChild = annotationElement.childNodes[j];
+            if (docChild.nodeType === 1 && (docChild as Element).localName === 'documentation') {
+              const docElement = docChild as Element;
 
-            // Get the text content
-            const textContent = docElement.textContent;
-            if (textContent && textContent.trim()) {
-              return textContent.trim();
+              // Get the text content
+              const textContent = docElement.textContent;
+              if (textContent && textContent.trim()) {
+                return textContent.trim();
+              }
             }
           }
         }
       }
-    }
 
-    return undefined;
+      return undefined;
+    } finally {
+      if (__profiling) {
+        this.profEnd('extractAnnotationText', __t0);
+      }
+    }
   }
 
   /**
@@ -2520,7 +2407,7 @@ export class Schema {
         if (node.localName === 'enumeration') {
           const value = node.getAttribute('value');
           if (value) {
-            const annotationText = Schema.extractAnnotationText(node);
+            const annotationText = this.getAnnotationCached(node);
             if (annotationText) {
               annotations.set(value, annotationText);
             }
@@ -2876,21 +2763,32 @@ export class Schema {
   }
 
   // Cached annotation extraction with type fallback
-  private getAnnotationCached(el: Element): string {
+  public getAnnotationCached(el: Element): string {
     const __profiling = this.shouldProfileMethods;
     const __t0 = __profiling ? this.profStart() : 0;
     try {
       const cache = this.cache.annotationCache!;
       const existing = cache.get(el);
-      if (existing !== undefined) { if (this.shouldProfileCaches) this.cacheStats.annotationCache.hits++; return existing; }
+      if (existing !== undefined) {
+        if (this.shouldProfileCaches) this.cacheStats.annotationCache.hits++;
+        return existing;
+      }
       if (this.shouldProfileCaches) this.cacheStats.annotationCache.misses++;
-      let annotation = Schema.extractAnnotationText(el) || '';
+      let annotation = this.extractAnnotationText(el) || '';
       if (!annotation) {
         const typeName = el.getAttribute('type');
         if (typeName) {
           const typeDef = this.schemaIndex.types[typeName];
           if (typeDef) {
-            annotation = Schema.extractAnnotationText(typeDef) || '';
+            const existingForType = cache.get(typeDef);
+            if (existingForType !== undefined) {
+              if (this.shouldProfileCaches) this.cacheStats.annotationCache.hits++;
+              annotation = existingForType;
+            } else {
+              annotation = this.extractAnnotationText(typeDef) || '';
+              cache.set(typeDef, annotation);
+              if (this.shouldProfileCaches) this.cacheStats.annotationCache.sets++;
+            }
           }
         }
       }
