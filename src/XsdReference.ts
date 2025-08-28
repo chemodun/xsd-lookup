@@ -1,10 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Schema, ElementLocation, AttributeInfo, EnhancedAttributeInfo, AttributeValidationResult } from './Schema';
+import { Schema, ElementLocation, EnhancedAttributeInfo, AttributeValidationResult } from './Schema';
 import { XsdDetector } from './XsdDetector';
 
 // Re-export interfaces from Schema for public API
-export type { ElementLocation, AttributeInfo, EnhancedAttributeInfo, AttributeValidationResult };
+export type { ElementLocation, EnhancedAttributeInfo, AttributeValidationResult };
 
 /**
  * Interface for attribute name validation results
@@ -165,10 +165,10 @@ export class XsdReference {
    * @param elementName The element name to find
    * @param hierarchy The element hierarchy in bottom-up order (parent → root)
    */
-  public getElementAttributes(schemaName: string, elementName: string, hierarchy: string[] = []): AttributeInfo[] {
+  public getElementAttributes(schemaName: string, elementName: string, hierarchy: string[] = []): Record<string, Element> {
     const schema = this.loadSchema(schemaName);
     if (!schema) {
-      return [];
+      return {};
     }
 
     return schema.getElementAttributes(elementName, hierarchy);
@@ -180,10 +180,10 @@ export class XsdReference {
    * @param elementName The element name to find
    * @param hierarchy The element hierarchy in bottom-up order (parent → root)
    */
-  public getElementAttributesWithTypes(schemaName: string, elementName: string, hierarchy: string[] = [], element?: Element): EnhancedAttributeInfo[] {
+  public getElementAttributesWithTypes(schemaName: string, elementName: string, hierarchy: string[] = [], element?: Element): Record<string, EnhancedAttributeInfo> {
     const schema = this.loadSchema(schemaName);
     if (!schema) {
-      return [];
+      return {};
     }
 
     return schema.getElementAttributesWithTypes(elementName, hierarchy, element);
@@ -213,18 +213,18 @@ export class XsdReference {
    * @returns Object containing wrong attributes and missing required attributes
    */
   public static validateAttributeNames(
-    attributeInfos: EnhancedAttributeInfo[],
+    attributeInfos: Record<string, EnhancedAttributeInfo>,
     providedAttributes: string[]
   ): AttributeNameValidationResult {
     // Filter out XML infrastructure attributes from provided attributes
     const filteredProvidedAttributes = this.filterOutInfrastructureAttributes(providedAttributes);
 
     // Get all valid attribute names from schema
-    const validAttributeNames = new Set(attributeInfos.map(attr => attr.name));
+    const validAttributeNames = new Set(Object.keys(attributeInfos));
 
     // Get required attribute names
     const requiredAttributeNames = new Set(
-      attributeInfos.filter(attr => attr.required).map(attr => attr.name)
+      Object.values(attributeInfos).filter(attr => attr.required).map(attr => attr.name)
     );
 
     // Find wrong attributes (provided but not in schema)
@@ -248,10 +248,10 @@ export class XsdReference {
    * @returns Array of attributes that match the specified type
    */
   public static filterAttributesByType(
-    attributeInfos: EnhancedAttributeInfo[],
+    attributeInfos: Record<string, EnhancedAttributeInfo>,
     attributeType: string
   ): string[] {
-    return attributeInfos
+    return Object.values(attributeInfos)
       .filter(attr => attr.type === attributeType && !this.isXmlInfrastructureAttribute(attr.name))
       .map(attr => attr.name);
   }
@@ -263,10 +263,10 @@ export class XsdReference {
    * @returns Array of attributes that have the specified restriction type
    */
   public static filterAttributesByRestriction(
-    attributeInfos: EnhancedAttributeInfo[],
+    attributeInfos: Record<string, EnhancedAttributeInfo>,
     restrictionType: 'enumeration' | 'pattern' | 'length' | 'range'
   ): string[] {
-    return attributeInfos
+    return Object.values(attributeInfos)
       .filter(attr => {
         // Skip infrastructure attributes
         if (this.isXmlInfrastructureAttribute(attr.name)) {
@@ -298,7 +298,7 @@ export class XsdReference {
    * @returns Validation result with details
    */
   public static validateAttributeValueAgainstRules(
-    attributeInfos: EnhancedAttributeInfo[],
+    attributeInfos: Record<string, EnhancedAttributeInfo>,
     attributeName: string,
     attributeValue: string
   ): { isValid: boolean; errorMessage?: string; violatedRules?: string[] } {
@@ -310,7 +310,7 @@ export class XsdReference {
       };
     }
 
-    const attribute = attributeInfos.find(attr => attr.name === attributeName);
+    const attribute = attributeInfos[attributeName];
 
     if (!attribute) {
       return {
@@ -395,7 +395,7 @@ export class XsdReference {
    * @returns Map where key is the enum value and value is its annotation text, or empty map if no enumeration exists
    */
   public static getAttributePossibleValues(
-    attributeInfos: EnhancedAttributeInfo[],
+    attributeInfos: Record<string, EnhancedAttributeInfo>,
     attributeName: string
   ): Map<string, string> {
     // Return empty map for XML infrastructure attributes
@@ -403,7 +403,7 @@ export class XsdReference {
       return new Map();
     }
 
-    const attribute = attributeInfos.find(attr => attr.name === attributeName);
+    const attribute = attributeInfos[attributeName];
 
     if (!attribute || !attribute.enumValues) {
       return new Map();
