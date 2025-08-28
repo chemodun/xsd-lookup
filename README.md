@@ -38,19 +38,23 @@ import { XsdReference } from 'xsd_lookup';
 // Initialize the validation system
 const xsdRef = new XsdReference();
 xsdRef.init('./tests/data/xsd');
-const elementName = 'set_value';
-const elementHierarchy = ['actions', 'attention', 'aiscript']; // Please pay attention to the hierarchy order, it should be bottom-up (from immediate parent to root element)
 
-const elementDefinition = xsdRef.getElementDefinition(elementName, elementHierarchy);
+const schemaName = 'aiscripts';
+const elementName = 'set_value';
+const elementHierarchy = ['actions', 'attention', 'aiscript']; // bottom-up (parent -> root)
+
+const elementDefinition = xsdRef.getElementDefinition(schemaName, elementName, elementHierarchy);
 console.log(`Element ${elementName} is ${elementDefinition ? 'defined' : 'not defined'} in the schema.`);
 
-const elementAttributes = xsdRef.getElementAttributesWithTypes(elementName, elementHierarchy);
-console.log(`Element ${elementName} has ${elementAttributes.length} attributes.`);
+// Returns Record<string, EnhancedAttributeInfo>
+const elementAttributes = xsdRef.getElementAttributesWithTypes(schemaName, elementName, elementHierarchy);
+console.log(`Element ${elementName} has ${Object.keys(elementAttributes).length} attributes.`);
 
-const attributeValues = xsdRef.getAttributePossibleValues(elementAttributes, 'operation');
+// Static utilities operate on the attribute info map
+const attributeValues = XsdReference.getAttributePossibleValues(elementAttributes, 'operation');
 console.log(`Possible values for 'operation': ${Array.from(attributeValues.keys()).join(', ')}`);
 
-const checkAttributeValue = xsdRef.validateAttributeValueAgainstRules(elementAttributes, 'operation', 'unknown');
+const checkAttributeValue = XsdReference.validateAttributeValueAgainstRules(elementAttributes, 'operation', 'unknown');
 console.log(`Attribute 'operation' value 'unknown' is ${checkAttributeValue.isValid ? 'valid' : 'invalid'}.`);
 
 // Get enumeration values from SimpleType definitions
@@ -75,7 +79,7 @@ const elementName = 'set_value';
 const elementHierarchy = ['actions', 'attention', 'aiscript'];
 
 const elementDefinition = xsdReference.getElementDefinition('aiscripts', elementName, elementHierarchy);
-const elementAttributes = xsdReference.getElementAttributesWithTypes('aiscripts', elementName, elementHierarchy);
+const elementAttributes = xsdReference.getElementAttributesWithTypes('aiscripts', elementName, elementHierarchy); // Record<string, EnhancedAttributeInfo>
 
 // Clean up when done
 xsdReference.dispose();
@@ -88,12 +92,6 @@ xsdReference.dispose();
 #### Exported Interfaces
 
 ```typescript
-// Basic attribute information
-export interface AttributeInfo {
-  name: string;
-  node: Element; // DOM element reference
-}
-
 // Location of a schema element definition
 interface ElementLocation {
   uri: string;         // file:// URI to the XSD file
@@ -136,6 +134,10 @@ interface AttributeNameValidationResult {
   missingRequiredAttributes: string[];
 }
 ```
+
+Notes:
+
+- Methods returning attribute info use an object map keyed by attribute name: Record<string, EnhancedAttributeInfo>.
 
 ### 🏷️ Input parameters
 
@@ -247,29 +249,25 @@ const elementDef = xsdRef.getElementDefinition('aiscripts', 'set_value', ['actio
 // Returns: Element definition object or undefined if not found
 ```
 
-##### `getElementAttributes(schemaName: string, elementName: string, hierarchy?: string[]): AttributeInfo[]`
+##### `getElementAttributes(schemaName: string, elementName: string, hierarchy?: string[]): Record<string, Element>`
 
-Get basic attribute information for an element.
+Get basic attribute elements for an element as a map of attribute name to the defining Element node.
 
 **Important**: The `hierarchy` parameter should be provided in **bottom-up order** (from immediate parent to root element).
 
 ```typescript
 // For element structure: <aiscript><attention><actions><set_value>
 // Hierarchy for 'set_value' element should be: ['actions', 'attention', 'aiscript']
-const attributes: AttributeInfo[] = xsdRef.getElementAttributes('aiscripts', 'set_value', ['actions', 'attention', 'aiscript']);
-// Returns:
-// [{
-//   name: 'name',
-//   node: Element // DOM element reference
-// },
+const attributes: Record<string, Element> = xsdRef.getElementAttributes('aiscripts', 'set_value', ['actions', 'attention', 'aiscript']);
+// Returns Record<string, EnhancedAttributeInfo> keyed by attribute name:
 // {
-//   name: 'value',
-//   node: Element // DOM element reference
-// },
-// ...]
+//   name: Element,   // DOM element reference to xs:attribute definition
+//   value: Element,
+//   ...
+// }
 ```
 
-##### `getElementAttributesWithTypes(schemaName: string, elementName: string, hierarchy?: string[]): EnhancedAttributeInfo[]`
+##### `getElementAttributesWithTypes(schemaName: string, elementName: string, hierarchy?: string[], elementDef?: Element): Record<string, EnhancedAttributeInfo>`
 
 Get all attributes for an element with complete type information including:
 
@@ -281,28 +279,31 @@ Get all attributes for an element with complete type information including:
 - Attribute definition location (file URI, line, column, lengthOfStartTag)
 - Attribute annotation text (if available)
 
+Performance tip: You can pass an optional `elementDef` (from `getElementDefinition`) to avoid re-resolving the element in the schema.
+
 **Important**: The `hierarchy` parameter should be provided in **bottom-up order** (from immediate parent to root element).
 
 ```typescript
 // For element structure: <aiscript><attention><actions><do_if>
 // Hierarchy for 'do_if' element should be: ['actions', 'attention', 'aiscript']
-const attributes: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'attention', 'aiscript']);
-// Returns:
-// [{
-//   name: 'value',
-//   type: 'expression',
-//   required: true,
-//   patterns: ['[pattern regex]'],
-//   enumValues: undefined,
-//   annotation: 'Description text...'(optional),
-//   location: {
-//     uri: 'file:///C:/path/to/aiscripts.xsd',
-//     line: 123,
-//     column: 5,
-//     lengthOfStartTag: 42
+const attributes = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'attention', 'aiscript']);
+// Returns Record<string, EnhancedAttributeInfo> keyed by attribute name:
+// {
+//   value: {
+//     name: 'value',
+//     type: 'expression',
+//     required: true,
+//     patterns: ['[pattern regex]'],
+//     enumValues: undefined,
+//     annotation: 'Description text...'(optional),
+//     location: {
+//       uri: 'file:///C:/path/to/aiscripts.xsd',
+//       line: 123,
+//       column: 5,
+//       lengthOfStartTag: 42
+//     }
 //   }
 // }
-// ...]
 ```
 
 ##### `validateAttributeValue(schemaName: string, elementName: string, attributeName: string, value: string, hierarchy?: string[]): AttributeValidationResult`
@@ -476,7 +477,7 @@ Notes:
 - line and column are 1-based positions within that file.
 - lengthOfStartTag is the character length of the element’s start tag (from '<' to the matching '>').
 
-##### `XsdReference.validateAttributeNames(attributeInfos: EnhancedAttributeInfo[], providedAttributes: string[]): AttributeNameValidationResult`
+##### `XsdReference.validateAttributeNames(attributeInfos: Record<string, EnhancedAttributeInfo>, providedAttributes: string[]): AttributeNameValidationResult`
 
 Validate attribute names against schema definitions. This static method checks which attributes are valid and identifies missing required attributes.
 
@@ -484,7 +485,7 @@ Validate attribute names against schema definitions. This static method checks w
 
 ```typescript
 // Get attribute info first
-const attributeInfos: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'attention', 'aiscript']);
+const attributeInfos = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'attention', 'aiscript']);
 const providedAttrs = ['value', 'chance', 'xmlns:xsi', 'invalid_attr'];
 
 const nameValidation: AttributeNameValidationResult = XsdReference.validateAttributeNames(attributeInfos, providedAttrs);
@@ -496,7 +497,7 @@ const nameValidation: AttributeNameValidationResult = XsdReference.validateAttri
 // Note: 'xmlns:xsi' is ignored and doesn't appear in wrongAttributes
 ```
 
-##### `XsdReference.validateAttributeValueAgainstRules(attributeInfos: EnhancedAttributeInfo[], attributeName: string, attributeValue: string)`
+##### `XsdReference.validateAttributeValueAgainstRules(attributeInfos: Record<string, EnhancedAttributeInfo>, attributeName: string, attributeValue: string)`
 
 Validate an attribute value against all XSD rules (patterns, enumerations, ranges, etc.). This static method provides detailed validation with rule violation information.
 
@@ -504,7 +505,7 @@ Validate an attribute value against all XSD rules (patterns, enumerations, range
 
 ```typescript
 // Get attribute info first
-const attributeInfos: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'attention', 'aiscript']);
+const attributeInfos = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'attention', 'aiscript']);
 
 const valueValidation = XsdReference.validateAttributeValueAgainstRules(
   attributeInfos,
@@ -543,7 +544,7 @@ const infraValidation = XsdReference.validateAttributeValueAgainstRules(
 // }
 ```
 
-##### `XsdReference.getAttributePossibleValues(attributeInfos: EnhancedAttributeInfo[], attributeName: string): Map<string, string>`
+##### `XsdReference.getAttributePossibleValues(attributeInfos: Record<string, EnhancedAttributeInfo>, attributeName: string): Map<string, string>`
 
 Get all possible enumeration values for an attribute, if it has enumeration restrictions.
 
@@ -551,7 +552,7 @@ Get all possible enumeration values for an attribute, if it has enumeration rest
 
 ```typescript
 // Get attribute info first
-const attributeInfos: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('aiscripts', 'set_value', ['actions', 'attention', 'aiscript']);
+const attributeInfos = xsdRef.getElementAttributesWithTypes('aiscripts', 'set_value', ['actions', 'attention', 'aiscript']);
 
 const possibleValues: Map<string, string> = XsdReference.getAttributePossibleValues(attributeInfos, 'operator');
 // Returns: Map<string, string> where key is enum value, value is annotation
@@ -571,7 +572,7 @@ if (possibleValues.size > 0) {
 }
 ```
 
-##### `XsdReference.filterAttributesByType(attributeInfos: EnhancedAttributeInfo[], attributeType: string): string[]`
+##### `XsdReference.filterAttributesByType(attributeInfos: Record<string, EnhancedAttributeInfo>, attributeType: string): string[]`
 
 Filter attributes by their XSD type (e.g., 'xs:string', 'xs:int', 'expression').
 
@@ -579,7 +580,7 @@ Filter attributes by their XSD type (e.g., 'xs:string', 'xs:int', 'expression').
 
 ```typescript
 // Get attribute info first
-const attributeInfos: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'attention', 'aiscript']);
+const attributeInfos = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'attention', 'aiscript']);
 
 const stringAttributes: string[] = XsdReference.filterAttributesByType(attributeInfos, 'xs:string');
 // Returns: ['comment', 'name'] (example - attributes with xs:string type)
@@ -588,7 +589,7 @@ const expressionAttributes: string[] = XsdReference.filterAttributesByType(attri
 // Returns: ['value', 'chance'] (example - attributes with expression type)
 ```
 
-##### `XsdReference.filterAttributesByRestriction(attributeInfos: EnhancedAttributeInfo[], restrictionType: 'enumeration' | 'pattern' | 'length' | 'range'): string[]`
+##### `XsdReference.filterAttributesByRestriction(attributeInfos: Record<string, EnhancedAttributeInfo>, restrictionType: 'enumeration' | 'pattern' | 'length' | 'range'): string[]`
 
 Filter attributes by the type of XSD restriction they have.
 
@@ -596,7 +597,7 @@ Filter attributes by the type of XSD restriction they have.
 
 ```typescript
 // Get attribute info first
-const attributeInfos: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'attention', 'aiscript']);
+const attributeInfos = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'attention', 'aiscript']);
 
 const enumAttributes: string[] = XsdReference.filterAttributesByRestriction(attributeInfos, 'enumeration');
 // Returns: ['operator', 'type'] (example - attributes with enumeration restrictions)
@@ -611,20 +612,20 @@ const lengthAttributes: string[] = XsdReference.filterAttributesByRestriction(at
 // Returns: ['text'] (example - attributes with length restrictions)
 ```
 
-##### `XsdReference.extractAnnotationText(element: Element): string | undefined`
+##### `extractAnnotationText(schemaName: string, element: Element): string | undefined` (instance)
 
-Extract annotation text from an XML element. This provides access to Schema's annotation extraction functionality.
+Extract annotation text from an XML element in the context of a specific schema. This is used by the test runner to track annotation coverage and is also available for consumers.
 
 ```typescript
 // This is typically used internally, but can be useful for custom schema processing
 const element: Element = /* DOM element from XSD */;
-const annotation: string | undefined = XsdReference.extractAnnotationText(element);
+const annotation: string | undefined = xsdRef.extractAnnotationText('aiscripts', element);
 // Returns: "Description text from xs:annotation/xs:documentation" or undefined
 
 // Example usage with element definitions:
 const elementDef = xsdRef.getElementDefinition('aiscripts', 'do_if', ['actions', 'attention', 'aiscript']);
 if (elementDef) {
-  const description = XsdReference.extractAnnotationText(elementDef);
+  const description = xsdRef.extractAnnotationText('aiscripts', elementDef);
   console.log('Element description:', description || 'No description available');
 }
 ```
@@ -635,7 +636,7 @@ if (elementDef) {
 // 1. Get schema and attribute info once
 const xsdRef = new XsdReference();
 xsdRef.init('./tests/data/xsd');
-const attributeInfos: EnhancedAttributeInfo[] = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'attention', 'aiscript']);
+const attributeInfos = xsdRef.getElementAttributesWithTypes('aiscripts', 'do_if', ['actions', 'attention', 'aiscript']);
 
 // 2. Validate attribute names (fast, no schema lookup needed)
 // Infrastructure attributes (xmlns, xsi:) are automatically filtered out
@@ -646,7 +647,7 @@ if (nameValidation.wrongAttributes.length > 0) {
 
 // 3. Validate attribute values (fast, no schema lookup needed)
 // Infrastructure attributes automatically return { isValid: true }
-for (const attrName of validAttributes) {
+for (const attrName of Object.keys(attributeInfos)) {
   const valueValidation = XsdReference.validateAttributeValueAgainstRules(
     attributeInfos,
     attrName,
