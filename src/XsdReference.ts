@@ -180,13 +180,13 @@ export class XsdReference {
    * @param elementName The element name to find
    * @param hierarchy The element hierarchy in bottom-up order (parent → root)
    */
-  public getElementAttributesWithTypes(schemaName: string, elementName: string, hierarchy: string[] = []): EnhancedAttributeInfo[] {
+  public getElementAttributesWithTypes(schemaName: string, elementName: string, hierarchy: string[] = [], element?: Element): EnhancedAttributeInfo[] {
     const schema = this.loadSchema(schemaName);
     if (!schema) {
       return [];
     }
 
-    return schema.getElementAttributesWithTypes(elementName, hierarchy);
+    return schema.getElementAttributesWithTypes(elementName, hierarchy, element);
   }
 
   /**

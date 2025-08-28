@@ -1346,13 +1346,11 @@ export class Schema {
     try {
       const attributes: Record<string, Element> = {};
 
+      // Get the correct element definition based on hierarchical context
+      element = element || this.getElementDefinition(elementName, hierarchy);
       if (!element) {
-        // Get the correct element definition based on hierarchical context
-        element = this.getElementDefinition(elementName, hierarchy);
-        if (!element) {
-          // Cache empty result
-          return [];
-        }
+        // Cache empty result
+        return [];
       }
 
       const cache = this.cache.attributeCache;
@@ -1483,12 +1481,12 @@ export class Schema {
   /**
    * Get enhanced attribute information including type and validation details
    */
-  public getElementAttributesWithTypes(elementName: string, hierarchy: string[] = []): EnhancedAttributeInfo[] {
+  public getElementAttributesWithTypes(elementName: string, hierarchy: string[] = [], element?: Element): EnhancedAttributeInfo[] {
     const __profiling = this.shouldProfileMethods;
     const __t0 = __profiling ? this.profStart() : 0;
     try {
 
-      const element = this.getElementDefinition(elementName, hierarchy);
+      element = element || this.getElementDefinition(elementName, hierarchy);
       if (!element) return [];
 
       const cache = this.cache.enhancedAttributesCache;
