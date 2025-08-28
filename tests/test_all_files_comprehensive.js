@@ -32,10 +32,13 @@ const testDirs = [
 // Stats tracking
 let totalFiles = 0;
 let validFiles = 0;
+
 let totalElements = 0;
 let validElements = 0;
+let elementsWithAnnotation = 0;
 let totalAttributes = 0;
 let validAttributes = 0;
+let attributesWithAnnotation = 0;
 let totalAttributeValues = 0;
 let validAttributeValues = 0;
 let attributeTypeStats = {};
@@ -250,7 +253,9 @@ function validateElement(schemaName, elementInfo, filePath) {
     validAttributes: [],
     invalidAttributes: [],
     invalidAttributeValues: [],
-    attributeValidationDetails: []
+    attributeValidationDetails: [],
+    fileElementsWithAnnotation: 0,
+    fileAttributesWithAnnotation: 0
   };
 
   // Convert top-down hierarchy (from XML parsing) to bottom-up hierarchy (expected by XsdReference)
@@ -278,9 +283,11 @@ function validateElement(schemaName, elementInfo, filePath) {
       throw new Error(`${errorMsg}. ${errorDetails}`);
     }
   }
-
+  if (xsdReference.extractAnnotationText(schemaName, elementDef)) {
+    results.fileElementsWithAnnotation++;
+  }
   // Get comprehensive attribute information including validation rules
-  const schemaAttributes = xsdReference.getElementAttributesWithTypes(schemaName, name, bottomUpHierarchy);
+  const schemaAttributes = xsdReference.getElementAttributesWithTypes(schemaName, name, bottomUpHierarchy, elementDef);
 
   // Use the static method to validate attribute names
   const nameValidation = XsdReference.validateAttributeNames(schemaAttributes, attributes);
@@ -299,7 +306,7 @@ function validateElement(schemaName, elementInfo, filePath) {
 
       // Throw error instead of process.exit(1)
       const errorMsg = `Element '${name}' has invalid attribute '${attr}'`;
-      const errorDetails = `Hierarchy: [${bottomUpHierarchy.join(' > ')}], Valid attributes: ${schemaAttributes.map(a => a.name).join(', ')}, All element attributes: ${attributes.join(', ')}, Attribute value: '${attributeValues?.[attr] || ''}', File: ${filePath}`;
+      const errorDetails = `Hierarchy: [${bottomUpHierarchy.join(' > ')}], Valid attributes: ${Object.keys(schemaAttributes)}, All element attributes: ${attributes.join(', ')}, Attribute value: '${attributeValues?.[attr] || ''}', File: ${filePath}`;
       throw new Error(`${errorMsg}. ${errorDetails}`);
     }
   }
@@ -319,7 +326,7 @@ function validateElement(schemaName, elementInfo, filePath) {
       results.validAttributes.push(attr);
 
       // Get detailed attribute info
-      const attrInfo = schemaAttributes.find(a => a.name === attr);
+      const attrInfo = schemaAttributes[attr];
       const value = (attributeValues && attributeValues[attr] !== undefined) ? attributeValues[attr] : '';
 
       // Use the static method to validate attribute value against rules
@@ -358,6 +365,12 @@ function validateElement(schemaName, elementInfo, filePath) {
         errorDetails += `, File: ${filePath}`;
 
         throw new Error(`${errorMsg}. ${errorDetails}`);
+      } else {
+        if (attrInfo?.annotation) {
+          results.fileAttributesWithAnnotation++;
+        } /* else if (attrInfo) {
+          console.log(`Warning: No annotation found for attribute '${attr}' of type '${attrInfo.type}' in Element '${name}'`);
+        } */
       }
 
       results.attributeValidationDetails.push(validationDetail);
@@ -463,22 +476,17 @@ function testDirectory(dirInfo) {
         warningOutput.push(`⚠️ Expected schema: ${dirInfo.expectedSchema}, got: ${detectedSchemaName}`);
       }
 
+
       // Extract all elements from the XML
       const xmlElements = extractElementsFromXml(xmlContent, filePath);
       console.log(`   Elements found: ${xmlElements.length}`);
       validationOutput.push(`🔧 Elements found: ${xmlElements.length}`);
 
       // Count all attributes found in the XML (excluding XML namespace attributes)
-      const totalAttributesInFile = xmlElements.reduce((sum, elem) => {
-        return sum + elem.attributes.filter(attr => {
-          // Filter out XML namespace attributes from the count
-          return !(attr.startsWith('xmlns:') || attr.startsWith('xsi:') || attr === 'xmlns');
-        }).length;
-      }, 0);
-      console.log(`   Attributes found: ${totalAttributesInFile}`);
-      validationOutput.push(`⚙️ Attributes found: ${totalAttributesInFile}`);
 
       let fileElementsValid = 0;
+      let fileElementsWithAnnotation = 0;
+      let fileAttributesWithAnnotation = 0;
       let fileAttributesValid = 0;
       let fileAttributesTotal = 0;
       let fileAttributeValuesValid = 0;
@@ -524,8 +532,12 @@ function testDirectory(dirInfo) {
 
           fileAttributesTotal += elementTotalAttrs;
           fileAttributesValid += elementValidAttrs;
+          fileElementsWithAnnotation += validation.fileElementsWithAnnotation;
+          fileAttributesWithAnnotation += validation.fileAttributesWithAnnotation;
           totalAttributes += elementTotalAttrs;
           validAttributes += elementValidAttrs;
+          elementsWithAnnotation += validation.fileElementsWithAnnotation;
+          attributesWithAnnotation += validation.fileAttributesWithAnnotation;
 
           // Track comprehensive validation statistics
           for (const detail of validation.attributeValidationDetails) {
@@ -603,12 +615,16 @@ function testDirectory(dirInfo) {
       const attributeValuesStatus = fileAttributeValuesValid === fileAttributeValuesTotal ? '✅' : '❌';
 
       console.log(`   ${elementsStatus} Elements valid: ${fileElementsValid}/${xmlElements.length}`);
+      console.log(`   Elements with annotation: ${fileElementsWithAnnotation}/${fileAttributesValid}`);
       console.log(`   ${attributesStatus} Attributes valid: ${fileAttributesValid}/${fileAttributesTotal}`);
+      console.log(`   Attributes with annotation: ${fileAttributesWithAnnotation}/${fileAttributesValid}`);
       console.log(`   ${attributeValuesStatus} Attribute values valid: ${fileAttributeValuesValid}/${fileAttributeValuesTotal}`);
       console.log(`   ⏱ Time: ${fileProcessTimeSec.toFixed(3)}s`);
 
       validationOutput.push(`${elementsStatus} Elements validation: ${fileElementsValid}/${xmlElements.length}`);
+      validationOutput.push(`📝 Elements with annotation: ${fileElementsWithAnnotation}/${fileAttributesValid}`);
       validationOutput.push(`${attributesStatus} Attributes validation: ${fileAttributesValid}/${fileAttributesTotal}`);
+      validationOutput.push(`📝 Attributes with annotation: ${fileAttributesWithAnnotation}/${fileAttributesValid}`);
       validationOutput.push(`${attributeValuesStatus} Attribute values validation: ${fileAttributeValuesValid}/${fileAttributeValuesTotal}`);      // Add detailed breakdown of elements and their validation status
       if (elementValidationDetails.length > 0) {
         validationOutput.push('\n📋 Element Validation Details:');
@@ -762,11 +778,13 @@ console.log(`   Success rate: ${totalFiles > 0 ? ((validFiles / totalFiles) * 10
 console.log(`\n🔧 Elements Validated:`);
 console.log(`   Total elements: ${totalElements}`);
 console.log(`   Valid elements: ${validElements}`);
+console.log(`   Elements with annotation: ${elementsWithAnnotation}/${validElements}`);
 console.log(`   Success rate: ${totalElements > 0 ? ((validElements / totalElements) * 100).toFixed(1) : 0}%`);
 
 console.log(`\n⚙️  Attributes Validated:`);
 console.log(`   Total attributes: ${totalAttributes}`);
 console.log(`   Valid attributes: ${validAttributes}`);
+console.log(`   Attributes with annotation: ${attributesWithAnnotation}/${validAttributes}`);
 console.log(`   Success rate: ${totalAttributes > 0 ? ((validAttributes / totalAttributes) * 100).toFixed(1) : 0}%`);
 
 console.log(`\n🔍 Attribute Value Validation:`);
