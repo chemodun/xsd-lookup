@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.11.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.10.2...xsd-lookup@v1.11.0) (2025-08-28)
+
+
+### Code Refactoring
+
+* **Schema:** remove redundant annotation enrichment logic ([5157733](https://github.com/chemodun/xsd-lookup/commit/515773343312d6f8f0a110a11aafc42bb8483dfe))
+* **Schema:** simplify element retrieval logic ([4cec02e](https://github.com/chemodun/xsd-lookup/commit/4cec02e329c8376d7f33cccf10ef5588124428ab))
+* **Schema:** update cache types for attributes ([cd2aa75](https://github.com/chemodun/xsd-lookup/commit/cd2aa7507a110c42d6185d7bfbd050217667d4db))
+* **tests:** enhance validation statistics tracking ([1695362](https://github.com/chemodun/xsd-lookup/commit/16953625e8c5a46dd64e3d476ea3e0a87cd77cfe))
+
+
+### Miscellaneous Chores
+
+* release 1.11.0 to reflect the API changes ([c2e6295](https://github.com/chemodun/xsd-lookup/commit/c2e62958352939e6ec1b9f711680f3bc21afe5f6))
+
+
+### Documentation
+
+* **README:** Reflect latest changes ([a35caa9](https://github.com/chemodun/xsd-lookup/commit/a35caa93f944dda89a9cbaa0dca806b7ec9ce7f2))
+
 ## [1.10.2](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.10.1...xsd-lookup@v1.10.2) (2025-08-25)
 
 ### Bug Fixes
