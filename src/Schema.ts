@@ -1553,8 +1553,8 @@ export class Schema {
       const extractValidationRules = (node: Element): void => {
         if (!node || node.nodeType !== 1) return;
 
-        // Use the reusable validation rule extraction
-        this.extractValidationRulesFromNode(node, validationInfo);
+        // This walker descends itself, so take only this node's own facet
+        this.applyValidationFacet(node, validationInfo);
 
         // Handle inheritance: if this is a restriction with a base type, inherit from base
         if (node.localName === 'restriction') {
@@ -1562,8 +1562,14 @@ export class Schema {
           if (baseType && baseType !== 'xs:string' && baseType.indexOf(':') === -1) {
             // This is a user-defined base type, not a built-in XSD type
             const baseInfo = this.getTypeValidationInfo(baseType);
-            // Merge base info into current info (current restrictions take precedence)
-            Object.assign(validationInfo, baseInfo, validationInfo);
+            // Merge base info into current info (current restrictions take precedence).
+            // Arrays are copied: the base type's cached entry must not be mutated by facets found later here.
+            const target = validationInfo as Record<string, unknown>;
+            for (const [key, value] of Object.entries(baseInfo)) {
+              if (target[key] === undefined) {
+                target[key] = Array.isArray(value) ? [...value] : value instanceof Map ? new Map(value) : value;
+              }
+            }
           }
         }
 
@@ -1578,16 +1584,21 @@ export class Schema {
                 // Recursively get validation info for each member type
                 const memberInfo = this.getTypeValidationInfo(memberTypeName);
 
-                // Merge patterns (union means ANY pattern can match)
+                // Merge patterns (union means ANY pattern can match).
+                // Members can reach the same base type by several paths, so add unique values only.
                 if (memberInfo.patterns) {
                   if (!validationInfo.patterns) validationInfo.patterns = [];
-                  validationInfo.patterns.push(...memberInfo.patterns);
+                  for (const pattern of memberInfo.patterns) {
+                    if (!validationInfo.patterns.includes(pattern)) validationInfo.patterns.push(pattern);
+                  }
                 }
 
                 // Merge enumerations (union means ANY enum value is valid)
                 if (memberInfo.enumValues) {
                   if (!validationInfo.enumValues) validationInfo.enumValues = [];
-                  validationInfo.enumValues.push(...memberInfo.enumValues);
+                  for (const enumValue of memberInfo.enumValues) {
+                    if (!validationInfo.enumValues.includes(enumValue)) validationInfo.enumValues.push(enumValue);
+                  }
                 }
 
                 // For numeric restrictions, use the most permissive ranges
@@ -1645,7 +1656,11 @@ export class Schema {
 
       // Extract enum value annotations if we have enumeration values
       if (validationInfo.enumValues && validationInfo.enumValues.length > 0) {
-        validationInfo.enumValuesAnnotations = this.extractEnumValueAnnotations(typeNode);
+        const annotations = this.extractEnumValueAnnotations(typeNode);
+        // An alias type (empty restriction on a base) has none of its own - keep the inherited ones
+        if (annotations.size > 0 || !validationInfo.enumValuesAnnotations) {
+          validationInfo.enumValuesAnnotations = annotations;
+        }
       }
       cache.set(typeNode, validationInfo);
       if (this.shouldProfileCaches) this.cacheStats.validationsCache.sets++;
@@ -1697,30 +1712,77 @@ export class Schema {
   }
 
   /**
-   * Get cached validation information for a node
+   * Apply the validation facet carried by a single node. Does not descend - callers that
+   * walk the subtree themselves must use this, not extractValidationRulesFromNode.
    */
-  private getCachedValidationInfo(node: Element): Partial<EnhancedAttributeInfo> {
-    const __profiling = this.shouldProfileMethods;
-    const __t0 = __profiling ? this.profStart() : 0;
-    try {
-      const cache = this.cache.validationsCache;
-      if (cache.has(node)) {
-        if (this.shouldProfileCaches) this.cacheStats.validationsCache.hits++;
-        return cache.get(node)!;
+  private applyValidationFacet(node: Element, validationInfo: Partial<EnhancedAttributeInfo>): void {
+    if (!node || node.nodeType !== 1) return;
+
+    // Extract enumeration values
+    if (node.localName === 'enumeration') {
+      const value = node.getAttribute('value');
+      if (value) {
+        if (!validationInfo.enumValues) validationInfo.enumValues = [];
+        validationInfo.enumValues.push(value);
       }
-      if (this.shouldProfileCaches) this.cacheStats.validationsCache.misses++;
-      const validationInfo: Partial<EnhancedAttributeInfo> = {};
-      this.extractValidationRulesFromNode(node, validationInfo);
-      cache.set(node, validationInfo);
-      if (this.shouldProfileCaches) this.cacheStats.validationsCache.sets++;
-      return validationInfo;
-    } finally {
-      if (__profiling) this.profEnd('getCachedValidationInfo', __t0);
+    }
+
+    // Extract pattern restrictions
+    if (node.localName === 'pattern') {
+      const pattern = node.getAttribute('value');
+      if (pattern) {
+        if (!validationInfo.patterns) validationInfo.patterns = [];
+        validationInfo.patterns.push(pattern);
+      }
+    }
+
+    // Extract length restrictions
+    if (node.localName === 'minLength') {
+      const minLength = parseInt(node.getAttribute('value') || '0', 10);
+      if (!isNaN(minLength)) {
+        validationInfo.minLength = minLength;
+      }
+    }
+
+    if (node.localName === 'maxLength') {
+      const maxLength = parseInt(node.getAttribute('value') || '0', 10);
+      if (!isNaN(maxLength)) {
+        validationInfo.maxLength = maxLength;
+      }
+    }
+
+    // Extract numeric range restrictions
+    if (node.localName === 'minInclusive') {
+      const minInclusive = parseFloat(node.getAttribute('value') || '0');
+      if (!isNaN(minInclusive)) {
+        validationInfo.minInclusive = minInclusive;
+      }
+    }
+
+    if (node.localName === 'maxInclusive') {
+      const maxInclusive = parseFloat(node.getAttribute('value') || '0');
+      if (!isNaN(maxInclusive)) {
+        validationInfo.maxInclusive = maxInclusive;
+      }
+    }
+
+    if (node.localName === 'minExclusive') {
+      const minExclusive = parseFloat(node.getAttribute('value') || '0');
+      if (!isNaN(minExclusive)) {
+        validationInfo.minExclusive = minExclusive;
+      }
+    }
+
+    if (node.localName === 'maxExclusive') {
+      const maxExclusive = parseFloat(node.getAttribute('value') || '0');
+      if (!isNaN(maxExclusive)) {
+        validationInfo.maxExclusive = maxExclusive;
+      }
     }
   }
 
   /**
-   * Extract validation rules from a node (reusable logic)
+   * Extract validation rules from a node and its whole subtree (reusable logic)
    */
   private extractValidationRulesFromNode(node: Element, validationInfo: Partial<EnhancedAttributeInfo>): void {
     const __profiling = this.shouldProfileMethods;
@@ -1728,67 +1790,7 @@ export class Schema {
     try {
       if (!node || node.nodeType !== 1) return;
 
-      // Extract enumeration values
-      if (node.localName === 'enumeration') {
-        const value = node.getAttribute('value');
-        if (value) {
-          if (!validationInfo.enumValues) validationInfo.enumValues = [];
-          validationInfo.enumValues.push(value);
-        }
-      }
-
-      // Extract pattern restrictions
-      if (node.localName === 'pattern') {
-        const pattern = node.getAttribute('value');
-        if (pattern) {
-          if (!validationInfo.patterns) validationInfo.patterns = [];
-          validationInfo.patterns.push(pattern);
-        }
-      }
-
-      // Extract length restrictions
-      if (node.localName === 'minLength') {
-        const minLength = parseInt(node.getAttribute('value') || '0', 10);
-        if (!isNaN(minLength)) {
-          validationInfo.minLength = minLength;
-        }
-      }
-
-      if (node.localName === 'maxLength') {
-        const maxLength = parseInt(node.getAttribute('value') || '0', 10);
-        if (!isNaN(maxLength)) {
-          validationInfo.maxLength = maxLength;
-        }
-      }
-
-      // Extract numeric range restrictions
-      if (node.localName === 'minInclusive') {
-        const minInclusive = parseFloat(node.getAttribute('value') || '0');
-        if (!isNaN(minInclusive)) {
-          validationInfo.minInclusive = minInclusive;
-        }
-      }
-
-      if (node.localName === 'maxInclusive') {
-        const maxInclusive = parseFloat(node.getAttribute('value') || '0');
-        if (!isNaN(maxInclusive)) {
-          validationInfo.maxInclusive = maxInclusive;
-        }
-      }
-
-      if (node.localName === 'minExclusive') {
-        const minExclusive = parseFloat(node.getAttribute('value') || '0');
-        if (!isNaN(minExclusive)) {
-          validationInfo.minExclusive = minExclusive;
-        }
-      }
-
-      if (node.localName === 'maxExclusive') {
-        const maxExclusive = parseFloat(node.getAttribute('value') || '0');
-        if (!isNaN(maxExclusive)) {
-          validationInfo.maxExclusive = maxExclusive;
-        }
-      }
+      this.applyValidationFacet(node, validationInfo);
 
       // Recursively search child nodes for validation rules (but not inheritance/union logic)
       for (let i = 0; i < node.childNodes.length; i++) {
@@ -3811,12 +3813,13 @@ export class Schema {
       const allEnumValues: string[] = [];
       const allAnnotations = new Map<string, string>();
 
-      // First, try to extract direct enumeration values
-      const validationInfo: Partial<EnhancedAttributeInfo> = this.getCachedValidationInfo(typeNode);
+      // Resolve through the full type (own facets plus any restriction base), not just this subtree:
+      // an alias like `<xs:restriction base="factionexprlookup"/>` carries no enumeration of its own
+      const validationInfo: Partial<EnhancedAttributeInfo> = this.getTypeValidationInfo(simpleTypeName);
 
       if (validationInfo.enumValues && validationInfo.enumValues.length > 0) {
         allEnumValues.push(...validationInfo.enumValues);
-        const directAnnotations = this.extractEnumValueAnnotations(typeNode);
+        const directAnnotations = validationInfo.enumValuesAnnotations ?? this.extractEnumValueAnnotations(typeNode);
         for (const [key, value] of directAnnotations) {
           allAnnotations.set(key, value);
         }
