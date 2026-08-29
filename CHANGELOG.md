@@ -2,7 +2,6 @@
 
 ## [1.11.3](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.11.2...xsd-lookup@v1.11.3) (2026-08-29)
 
-
 ### Bug Fixes
 
 * trusted publishing ([1cb4865](https://github.com/chemodun/xsd-lookup/commit/1cb4865f5791b7c6532b4fe49959af9f5d703658))
