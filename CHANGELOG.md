@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.2](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.11.1...xsd-lookup@v1.11.2) (2026-08-29)
+
+
+### Bug Fixes
+
+* npm publishing fixed ([56b2125](https://github.com/chemodun/xsd-lookup/commit/56b2125223a7883b38a3b14ceb42d9148447fb57))
+
 ## [1.11.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.11.0...xsd-lookup@v1.11.1) (2026-08-29)
 
 ### Bug Fixes
