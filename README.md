@@ -698,7 +698,7 @@ const schemaName = XsdDetector.getSchemaName('./scripts/my-script.xml');
 
 ### � Infrastructure Attribute Handling
 
-The validation system automatically handles XML infrastructure attributes to focus validation on content-relevant attributes:
+The validation system automatically handles XML infrastructure attributes to focus validation on content-relevant attributes.
 
 #### What are Infrastructure Attributes?
 
