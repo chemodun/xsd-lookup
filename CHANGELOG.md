@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.11.0...xsd-lookup@v1.11.1) (2026-08-29)
+
+### Bug Fixes
+
+* **build:** declare @types/node explicitly for TypeScript 7. ([ac34a51](https://github.com/chemodun/xsd-lookup/commit/ac34a51a6ae34d2490ccc83d123707d0af5c673a))
+* **Schema:** stop duplicating enumeration and pattern facets per type level ([9bb4175](https://github.com/chemodun/xsd-lookup/commit/9bb4175377560c0a39ec254e0774f2e5fdb720da))
+
 ## [1.11.0](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.10.2...xsd-lookup@v1.11.0) (2025-08-28)
 
 ### Code Refactoring
