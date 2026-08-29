@@ -22,7 +22,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/chemodun/xsd-lookup.git"
+    "url": "git+https://github.com/chemodun/xsd-lookup.git"
   },
   "bugs": {
     "url": "https://github.com/chemodun/xsd-lookup/issues"
