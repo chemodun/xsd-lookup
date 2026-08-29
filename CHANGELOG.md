@@ -2,7 +2,6 @@
 
 ## [1.11.1](https://github.com/chemodun/xsd-lookup/compare/xsd-lookup@v1.11.0...xsd-lookup@v1.11.1) (2026-08-29)
 
-
 ### Bug Fixes
 
 * **build:** declare @types/node explicitly for TypeScript 7. ([ac34a51](https://github.com/chemodun/xsd-lookup/commit/ac34a51a6ae34d2490ccc83d123707d0af5c673a))
